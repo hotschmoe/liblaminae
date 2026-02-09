@@ -1,0 +1,13 @@
+.{
+    .name = .laminae_lib,
+    .version = "0.35.8",
+    .minimum_zig_version = "0.15.2",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "root.zig",
+        "gen",
+        "man",
+        "shared",
+    },
+}

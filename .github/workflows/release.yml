@@ -1,0 +1,58 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get Version from build.zig.zon
+        id: get_version
+        run: |
+          VERSION=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if Tag Exists
+        id: check_tag
+        run: |
+          TAG_NAME="v${{ steps.get_version.outputs.version }}"
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Tag $TAG_NAME already exists, skipping release"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          name: v${{ steps.get_version.outputs.version }}
+          body: |
+            Synced from [laminae](https://github.com/hotschmoe/laminae) kernel v${{ steps.get_version.outputs.version }}.
+
+            ## Install
+
+            Add to your `build.zig.zon`:
+            ```zig
+            .dependencies = .{
+                .laminae_lib = .{
+                    .url = "https://github.com/hotschmoe/liblaminae/archive/refs/tags/v${{ steps.get_version.outputs.version }}.tar.gz",
+                },
+            },
+            ```
+
+            Then run `zig build` to get the hash, and add it.
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
