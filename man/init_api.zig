@@ -43,6 +43,11 @@ pub const InitMsgType = struct {
 
     /// Reboot request (triggers PSCI/watchdog reboot)
     pub const REBOOT: u16 = 0x3008;
+
+    /// Kill container request: payload[0..8] = container_id (u64)
+    pub const KILL: u16 = 0x3009;
+    /// Kill result: payload[0..8] = 0 success, nonzero = error
+    pub const KILL_RESULT: u16 = 0x300A;
 };
 
 /// Spawn a container by name
@@ -144,6 +149,29 @@ pub fn spawnShell() !u64 {
     if (err != 0 or shell_id == 0) return error.SpawnFailed;
 
     return shell_id;
+}
+
+/// Kill a container by ID (routes through lamina which has kill capability)
+pub fn kill(container_id: u64) !void {
+    var msg: IccMessage = undefined;
+    msg.msg_type = InitMsgType.KILL;
+    msg.flags = 0;
+    @memset(&msg.payload, 0);
+
+    @as(*align(1) u64, @ptrCast(&msg.payload[0])).* = container_id;
+
+    const send_res = sys.icc_send(INIT_ID, &msg);
+    if (lib.isError(send_res)) return error.IccError;
+
+    // Wait for response
+    var response: IccMessage = undefined;
+    const recv_res = sys.icc_recv(&response, 1_000_000_000); // 1s timeout
+    if (lib.isError(recv_res)) return error.TimedOut;
+
+    if (response.msg_type != InitMsgType.KILL_RESULT) return error.InvalidProtocol;
+
+    const result = @as(u64, @bitCast(response.payload[0..8].*));
+    if (result != 0) return error.KillFailed;
 }
 
 /// Request system reboot

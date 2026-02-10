@@ -18,6 +18,8 @@ pub const Syscall = enum(u64) {
     wait_event = 111,
     console_ctl = 112,
     get_crash_telemetry = 113,
+    container_list = 114,
+    container_log_read = 115,
     icc_send = 120,
     icc_recv = 121,
     ns_register = 130,
@@ -82,6 +84,19 @@ pub const DeviceDependencies = extern struct {
     phys: [4]u32,
     phy_count: u8,
     _padding: [4]u8,
+};
+pub const ContainerInfo = extern struct {
+    id: u16,
+    container_type: u8,
+    state: u8,
+    name_len: u8,
+    _pad: [3]u8,
+    name: [32]u8,
+    start_time_ns: u64,
+
+    pub fn getName(self: *const ContainerInfo) []const u8 {
+        return self.name[0..self.name_len];
+    }
 };
 pub const DirEntry = extern struct {
     name: [64]u8,
@@ -182,6 +197,14 @@ pub inline fn console_ctl(op: u64, arg0: u64, arg1: u64) u64 {
 
 pub inline fn get_crash_telemetry(buffer_ptr: u64, json_buf_ptr: u64, json_buf_len: u64) u64 {
     return svc3(@intFromEnum(Syscall.get_crash_telemetry), buffer_ptr, json_buf_ptr, json_buf_len);
+}
+
+pub inline fn container_list(buffer_ptr: *ContainerInfo, max_entries: u64) u64 {
+    return svc2(@intFromEnum(Syscall.container_list), @intFromPtr(buffer_ptr), max_entries);
+}
+
+pub inline fn container_log_read(container_id: u16, buffer_ptr: *u8, buffer_len: u64) u64 {
+    return svc3(@intFromEnum(Syscall.container_log_read), container_id, @intFromPtr(buffer_ptr), buffer_len);
 }
 
 pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {

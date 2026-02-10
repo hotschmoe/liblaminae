@@ -739,6 +739,8 @@ pub const ClientError = error{
     Timeout,
 };
 
+pub const ProgressFn = *const fn (bytes_received: usize) void;
+
 pub const ClientOptions = struct {
     /// HTTP version to use
     version: Version = .http_1_0,
@@ -757,6 +759,9 @@ pub const ClientOptions = struct {
 
     /// Max redirects to follow
     max_redirects: u8 = 5,
+
+    /// Called periodically during recv with bytes received so far
+    progress_fn: ?ProgressFn = null,
 };
 
 pub const Client = struct {
@@ -874,6 +879,10 @@ pub const Client = struct {
             }
 
             total_received += received;
+
+            if (self.options.progress_fn) |pfn| {
+                pfn(total_received);
+            }
 
             // Check for complete response
             if (findHeaderEnd(recv_buf[0..total_received])) |header_end| {
