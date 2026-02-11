@@ -34,6 +34,7 @@ pub const container_info = @import("shared/arch/container_info.zig");
 pub const compat = @import("shared/compat/table.zig");
 pub const platform_table = @import("shared/platform/table.zig");
 pub const icc_schema = @import("shared/icc/schema.zig");
+pub const filetypes = @import("shared/filetypes.zig");
 
 // Shared protocol specifications (build.zig provides module mapping)
 pub const net_stack_protocol = @import("net_stack_protocol");
@@ -41,9 +42,7 @@ pub const platform_types = @import("platform_types");
 pub const PlatformType = platform_types.PlatformType;
 
 /// Check if a return value is an error code
-pub fn isError(val: u64) bool {
-    return val >= 0xFFFF_FFFF_0000_0000;
-}
+pub const isError = errors.isError;
 
 // Re-export getContainerId for convenience (zero-syscall via TPIDRRO_EL0)
 pub const getContainerId = container_info.getContainerId;

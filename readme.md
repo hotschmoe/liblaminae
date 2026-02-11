@@ -34,6 +34,89 @@ Auto-copied from `src/shared/` by `zig build gen-lib`. **Do not edit manually.**
 
 Source of truth: `src/shared/`
 
+## Practical Notes
+
+### Console I/O
+
+**Output** uses the zero-syscall console ring mapped at a fixed VA in every
+container. Import `console.zig` and call `console.write()` or `console.printf()`:
+
+```zig
+const console = @import("liblaminae").console;
+console.write("hello\n");
+console.printf("value: {}\n", .{42});
+```
+
+**Input (stdin)** uses the `read` syscall with fd=0:
+
+```zig
+const sys = @import("liblaminae").sys;
+var buf: [1]u8 = undefined;
+
+// Blocking read (waits for input)
+_ = sys.read(0, &buf[0], 1, 0);
+
+// Non-blocking read (returns 0 if no data)
+const n = sys.read(0, &buf[0], 1, 1);
+```
+
+The shell, nano, and login services all use this interface.
+
+### Binary Size
+
+The kernel imposes no binary size limit. The ramfs supports files up to 3MB and
+the shell load buffer is 128KB. Any size constraints come from the deployment
+pipeline (e.g., playground upload endpoint), not the OS.
+
+However, `console.printf()` pulls in `std.fmt` which significantly increases
+binary size (~6.5KB to ~103KB). For tiny containers where size matters, use
+direct `sys.write()` with manual formatting:
+
+```zig
+const sys = @import("liblaminae").sys;
+
+fn write(msg: []const u8) void {
+    _ = sys.write(1, @constCast(msg.ptr), msg.len);
+}
+```
+
+`console.printf` is the right choice for larger containers where binary size
+is not critical.
+
+### Packed Return Values
+
+Some syscalls pack two values into a single u64 return:
+
+- `map_create` returns `(handle << 32) | (va & 0xFFFFFFFF)`.
+  Use `sys.MapResult.handle(result)` and `sys.MapResult.va(result)` to unpack.
+
+- `alloc_dma` returns `(bus_addr << 32) | (va & 0xFFFFFFFF)`.
+  Use `sys.DmaResult.busAddr(result)` and `sys.DmaResult.va(result)` to unpack.
+
+### File System Flags
+
+Use the generated `sys.OpenFlags` constants instead of raw values:
+
+```zig
+const fd = sys.fs_open(&path, path.len, sys.OpenFlags.WRITE_CREATE_TRUNCATE);
+```
+
+Available flags: `READ`, `WRITE`, `CREATE`, `TRUNCATE`, `APPEND`, and common
+combinations `READ_WRITE`, `WRITE_CREATE`, `WRITE_CREATE_TRUNCATE`.
+
+### Error Handling
+
+All syscalls return u64. Values at or above `errors.ERROR_BASE` are errors:
+
+```zig
+const lib = @import("liblaminae");
+const result = sys.map_create(1, 0);
+if (lib.isError(result)) {
+    const name = lib.errors.name(result); // e.g. "Map.InvalidHandle"
+    // handle error
+}
+```
+
 ## Regenerating
 
 ```bash

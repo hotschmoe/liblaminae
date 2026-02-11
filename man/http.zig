@@ -320,6 +320,39 @@ fn parseIpv4String(host: []const u8) ?u32 {
 }
 
 //------------------------------------------------------------------------------
+// URL Percent-Encoding
+//------------------------------------------------------------------------------
+
+/// Percent-encode a string for use as a query parameter value.
+/// Encodes all characters except unreserved: A-Z a-z 0-9 - _ . ~
+/// Returns the number of bytes written, or null if buffer too small.
+pub fn percentEncode(dest: []u8, src: []const u8) ?usize {
+    const hex = "0123456789ABCDEF";
+    var pos: usize = 0;
+    for (src) |c| {
+        if (isUnreserved(c)) {
+            if (pos >= dest.len) return null;
+            dest[pos] = c;
+            pos += 1;
+        } else {
+            if (pos + 3 > dest.len) return null;
+            dest[pos] = '%';
+            dest[pos + 1] = hex[c >> 4];
+            dest[pos + 2] = hex[c & 0x0F];
+            pos += 3;
+        }
+    }
+    return pos;
+}
+
+fn isUnreserved(c: u8) bool {
+    return (c >= 'A' and c <= 'Z') or
+        (c >= 'a' and c <= 'z') or
+        (c >= '0' and c <= '9') or
+        c == '-' or c == '_' or c == '.' or c == '~';
+}
+
+//------------------------------------------------------------------------------
 // HTTP Headers
 //------------------------------------------------------------------------------
 

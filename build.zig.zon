@@ -1,6 +1,6 @@
 .{
     .name = .liblaminae,
-    .version = "0.39.0",
+    .version = "0.43.1",
     .minimum_zig_version = "0.15.2",
     .paths = .{
         "build.zig",

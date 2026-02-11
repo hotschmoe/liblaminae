@@ -20,6 +20,7 @@ pub const Syscall = enum(u64) {
     get_crash_telemetry = 113,
     container_list = 114,
     container_log_read = 115,
+    get_capabilities = 116,
     icc_send = 120,
     icc_recv = 121,
     ns_register = 130,
@@ -50,6 +51,7 @@ pub const Syscall = enum(u64) {
     fs_stat = 223,
     fs_unlink = 224,
     fs_readdir = 225,
+    fs_mkdir = 226,
 };
 
 pub const Message = extern struct { source_id: u16, msg_type: u16, flags: u32, payload: [248]u8 };
@@ -124,6 +126,48 @@ pub const Stat = extern struct {
     ctime_nsec: i64,
     __reserved: [3]i64 = .{ 0, 0, 0 },
 };
+pub const Capability = struct {
+    pub const MMIO: u32 = 1 << 0;
+    pub const IRQ: u32 = 1 << 1;
+    pub const DMA: u32 = 1 << 2;
+    pub const SPAWN: u32 = 1 << 3;
+    pub const KILL: u32 = 1 << 4;
+    pub const PLATFORM_MMIO: u32 = 1 << 5;
+};
+
+pub const OpenFlags = struct {
+    pub const READ: u32 = 0x01;
+    pub const WRITE: u32 = 0x02;
+    pub const CREATE: u32 = 0x04;
+    pub const TRUNCATE: u32 = 0x08;
+    pub const APPEND: u32 = 0x10;
+    pub const READ_WRITE: u32 = 0x03;
+    pub const WRITE_CREATE: u32 = 0x06;
+    pub const WRITE_CREATE_TRUNCATE: u32 = 0x0E;
+};
+
+/// Helpers for unpacking the packed return value from map_create.
+/// map_create returns (handle << 32) | (va & 0xFFFFFFFF).
+pub const MapResult = struct {
+    pub inline fn handle(result: u64) u64 {
+        return result >> 32;
+    }
+    pub inline fn va(result: u64) u64 {
+        return result & 0xFFFFFFFF;
+    }
+};
+
+/// Helpers for unpacking the packed return value from alloc_dma.
+/// alloc_dma returns (bus_addr << 32) | (va & 0xFFFFFFFF).
+pub const DmaResult = struct {
+    pub inline fn busAddr(result: u64) u64 {
+        return result >> 32;
+    }
+    pub inline fn va(result: u64) u64 {
+        return result & 0xFFFFFFFF;
+    }
+};
+
 pub const WakeReason = enum(u64) {
     irq = 1,
     icc = 2,
@@ -205,6 +249,10 @@ pub inline fn container_list(buffer_ptr: *ContainerInfo, max_entries: u64) u64 {
 
 pub inline fn container_log_read(container_id: u16, buffer_ptr: *u8, buffer_len: u64) u64 {
     return svc3(@intFromEnum(Syscall.container_log_read), container_id, @intFromPtr(buffer_ptr), buffer_len);
+}
+
+pub inline fn get_capabilities() u64 {
+    return svc0(@intFromEnum(Syscall.get_capabilities));
 }
 
 pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {
@@ -325,5 +373,9 @@ pub inline fn fs_unlink(name_ptr: *const u8, name_len: u64) u64 {
 
 pub inline fn fs_readdir(path_ptr: *const u8, path_len: u64, buf_ptr: *DirEntry, max_entries: u64) u64 {
     return svc4(@intFromEnum(Syscall.fs_readdir), @intFromPtr(path_ptr), path_len, @intFromPtr(buf_ptr), max_entries);
+}
+
+pub inline fn fs_mkdir(path_ptr: *const u8, path_len: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_mkdir), @intFromPtr(path_ptr), path_len);
 }
 
