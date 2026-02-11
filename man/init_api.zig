@@ -78,6 +78,8 @@ pub fn spawn(name: []const u8) !u64 {
     const id = @as(u64, @bitCast(response.payload[0..8].*));
     const err = @as(u64, @bitCast(response.payload[8..16].*));
 
+    if (err == 2) return error.UnsafeName;
+    if (err == 3) return error.AlreadyRunning;
     if (err != 0) return error.SpawnFailed;
 
     return id;

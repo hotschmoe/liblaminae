@@ -95,6 +95,7 @@ pub const ContainerInfo = extern struct {
     _pad: [3]u8,
     name: [32]u8,
     start_time_ns: u64,
+    exit_code: u64,
 
     pub fn getName(self: *const ContainerInfo) []const u8 {
         return self.name[0..self.name_len];
@@ -243,8 +244,8 @@ pub inline fn get_crash_telemetry(buffer_ptr: u64, json_buf_ptr: u64, json_buf_l
     return svc3(@intFromEnum(Syscall.get_crash_telemetry), buffer_ptr, json_buf_ptr, json_buf_len);
 }
 
-pub inline fn container_list(buffer_ptr: *ContainerInfo, max_entries: u64) u64 {
-    return svc2(@intFromEnum(Syscall.container_list), @intFromPtr(buffer_ptr), max_entries);
+pub inline fn container_list(buffer_ptr: *ContainerInfo, max_entries: u64, flags: u64) u64 {
+    return svc3(@intFromEnum(Syscall.container_list), @intFromPtr(buffer_ptr), max_entries, flags);
 }
 
 pub inline fn container_log_read(container_id: u16, buffer_ptr: *u8, buffer_len: u64) u64 {
