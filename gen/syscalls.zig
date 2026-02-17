@@ -21,6 +21,9 @@ pub const Syscall = enum(u64) {
     container_list = 114,
     container_log_read = 115,
     get_capabilities = 116,
+    mem_info = 117,
+    container_stats = 118,
+    set_memory_limit = 119,
     icc_send = 120,
     icc_recv = 121,
     ns_register = 130,
@@ -29,6 +32,9 @@ pub const Syscall = enum(u64) {
     map_create = 140,
     map_attach = 141,
     map_detach = 142,
+    mmap = 144,
+    munmap = 145,
+    mprotect = 146,
     brk = 143,
     cache_clean_range = 150,
     cache_invalidate_range = 151,
@@ -52,6 +58,16 @@ pub const Syscall = enum(u64) {
     fs_unlink = 224,
     fs_readdir = 225,
     fs_mkdir = 226,
+    fs_rmdir = 227,
+    fs_rename = 228,
+    fs_ftruncate = 229,
+    fs_getcwd = 230,
+    fs_chdir = 231,
+    fs_access = 232,
+    writev = 233,
+    readv = 234,
+    pread = 235,
+    pwrite = 236,
 };
 
 pub const Message = extern struct { source_id: u16, msg_type: u16, flags: u32, payload: [248]u8 };
@@ -101,6 +117,36 @@ pub const ContainerInfo = extern struct {
         return self.name[0..self.name_len];
     }
 };
+pub const MemInfo = extern struct {
+    total_pages: u64,
+    free_pages: u64,
+    used_pages: u64,
+    page_size: u32,
+    pool_count: u8,
+    _pad: [3]u8,
+    container_count: u32,
+    _pad2: [4]u8,
+};
+pub const ContainerStats = extern struct {
+    id: u16,
+    container_type: u8,
+    state: u8,
+    name_len: u8,
+    _pad: [3]u8,
+    name: [32]u8,
+    cpu_ticks: u64,
+    syscall_count: u64,
+    heap_pages: u32,
+    code_pages: u32,
+    mmap_pages: u32,
+    total_pages: u32,
+    memory_limit_pages: u32,
+    _pad2: [4]u8,
+
+    pub fn getName(self: *const ContainerStats) []const u8 {
+        return self.name[0..self.name_len];
+    }
+};
 pub const DirEntry = extern struct {
     name: [64]u8,
     name_len: u8,
@@ -147,6 +193,11 @@ pub const OpenFlags = struct {
     pub const WRITE_CREATE_TRUNCATE: u32 = 0x0E;
 };
 
+pub const IoVec = extern struct {
+    base: u64,
+    len: u64,
+};
+
 /// Helpers for unpacking the packed return value from map_create.
 /// map_create returns (handle << 32) | (va & 0xFFFFFFFF).
 pub const MapResult = struct {
@@ -186,6 +237,8 @@ inline fn svc1(num: u64, a0: u64) u64 { return asm volatile ("svc #0" : [ret] "=
 inline fn svc2(num: u64, a0: u64, a1: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0), [a1] "{x1}" (a1) : .{ .memory = true }); }
 inline fn svc3(num: u64, a0: u64, a1: u64, a2: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0), [a1] "{x1}" (a1), [a2] "{x2}" (a2) : .{ .memory = true }); }
 inline fn svc4(num: u64, a0: u64, a1: u64, a2: u64, a3: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0), [a1] "{x1}" (a1), [a2] "{x2}" (a2), [a3] "{x3}" (a3) : .{ .memory = true }); }
+inline fn svc5(num: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0), [a1] "{x1}" (a1), [a2] "{x2}" (a2), [a3] "{x3}" (a3), [a4] "{x4}" (a4) : .{ .memory = true }); }
+inline fn svc6(num: u64, a0: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0), [a1] "{x1}" (a1), [a2] "{x2}" (a2), [a3] "{x3}" (a3), [a4] "{x4}" (a4), [a5] "{x5}" (a5) : .{ .memory = true }); }
 
 pub inline fn exit(status: u64) noreturn {
     _ = svc1(@intFromEnum(Syscall.exit), status);
@@ -204,8 +257,8 @@ pub inline fn get_time() u64 {
     return svc0(@intFromEnum(Syscall.get_time));
 }
 
-pub inline fn spawn(name_ptr: *const u8, name_len: u64, container_type: u8, device_info_ptr: ?*const DeviceInfo) u64 {
-    return svc4(@intFromEnum(Syscall.spawn), @intFromPtr(name_ptr), name_len, container_type, @intFromPtr(device_info_ptr));
+pub inline fn spawn(name_ptr: *const u8, name_len: u64, container_type: u8, device_info_ptr: ?*const DeviceInfo, argv_ptr: ?*const u8, argv_len: u64) u64 {
+    return svc6(@intFromEnum(Syscall.spawn), @intFromPtr(name_ptr), name_len, container_type, @intFromPtr(device_info_ptr), @intFromPtr(argv_ptr), argv_len);
 }
 
 pub inline fn kill(container_id: u16) u64 {
@@ -256,6 +309,18 @@ pub inline fn get_capabilities() u64 {
     return svc0(@intFromEnum(Syscall.get_capabilities));
 }
 
+pub inline fn mem_info(buffer_ptr: *MemInfo) u64 {
+    return svc1(@intFromEnum(Syscall.mem_info), @intFromPtr(buffer_ptr));
+}
+
+pub inline fn container_stats(buffer_ptr: *ContainerStats, max_entries: u64) u64 {
+    return svc2(@intFromEnum(Syscall.container_stats), @intFromPtr(buffer_ptr), max_entries);
+}
+
+pub inline fn set_memory_limit(target_container_id: u16, limit_pages: u32) u64 {
+    return svc2(@intFromEnum(Syscall.set_memory_limit), target_container_id, limit_pages);
+}
+
 pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {
     return svc2(@intFromEnum(Syscall.icc_send), target_id, @intFromPtr(msg_ptr));
 }
@@ -286,6 +351,18 @@ pub inline fn map_attach(handle: u64, perms: u64) u64 {
 
 pub inline fn map_detach(handle: u64) u64 {
     return svc1(@intFromEnum(Syscall.map_detach), handle);
+}
+
+pub inline fn mmap(addr: u64, length: u64, prot: u32, flags: u32) u64 {
+    return svc4(@intFromEnum(Syscall.mmap), addr, length, prot, flags);
+}
+
+pub inline fn munmap(addr: u64, length: u64) u64 {
+    return svc2(@intFromEnum(Syscall.munmap), addr, length);
+}
+
+pub inline fn mprotect(addr: u64, length: u64, prot: u32) u64 {
+    return svc3(@intFromEnum(Syscall.mprotect), addr, length, prot);
 }
 
 pub inline fn brk(new_break: u64) u64 {
@@ -378,5 +455,45 @@ pub inline fn fs_readdir(path_ptr: *const u8, path_len: u64, buf_ptr: *DirEntry,
 
 pub inline fn fs_mkdir(path_ptr: *const u8, path_len: u64) u64 {
     return svc2(@intFromEnum(Syscall.fs_mkdir), @intFromPtr(path_ptr), path_len);
+}
+
+pub inline fn fs_rmdir(path_ptr: *const u8, path_len: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_rmdir), @intFromPtr(path_ptr), path_len);
+}
+
+pub inline fn fs_rename(old_ptr: *const u8, old_len: u64, new_ptr: *const u8, new_len: u64) u64 {
+    return svc4(@intFromEnum(Syscall.fs_rename), @intFromPtr(old_ptr), old_len, @intFromPtr(new_ptr), new_len);
+}
+
+pub inline fn fs_ftruncate(fd: u64, length: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_ftruncate), fd, length);
+}
+
+pub inline fn fs_getcwd(buf_ptr: *u8, buf_len: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_getcwd), @intFromPtr(buf_ptr), buf_len);
+}
+
+pub inline fn fs_chdir(path_ptr: *const u8, path_len: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_chdir), @intFromPtr(path_ptr), path_len);
+}
+
+pub inline fn fs_access(path_ptr: *const u8, path_len: u64) u64 {
+    return svc2(@intFromEnum(Syscall.fs_access), @intFromPtr(path_ptr), path_len);
+}
+
+pub inline fn writev(fd: u64, iov_ptr: u64, iov_count: u64) u64 {
+    return svc3(@intFromEnum(Syscall.writev), fd, iov_ptr, iov_count);
+}
+
+pub inline fn readv(fd: u64, iov_ptr: u64, iov_count: u64) u64 {
+    return svc3(@intFromEnum(Syscall.readv), fd, iov_ptr, iov_count);
+}
+
+pub inline fn pread(fd: u64, buf: *u8, len: u64, offset: u64) u64 {
+    return svc4(@intFromEnum(Syscall.pread), fd, @intFromPtr(buf), len, offset);
+}
+
+pub inline fn pwrite(fd: u64, buf: *const u8, len: u64, offset: u64) u64 {
+    return svc4(@intFromEnum(Syscall.pwrite), fd, @intFromPtr(buf), len, offset);
 }
 

@@ -48,6 +48,9 @@ pub const InitMsgType = struct {
     pub const KILL: u16 = 0x3009;
     /// Kill result: payload[0..8] = 0 success, nonzero = error
     pub const KILL_RESULT: u16 = 0x300A;
+
+    /// Spawn with args: payload = name + 0xFF + argv_data (null-separated)
+    pub const SPAWN_WITH_ARGS: u16 = 0x300B;
 };
 
 /// Spawn a container by name
@@ -72,9 +75,45 @@ pub fn spawn(name: []const u8) !u64 {
     const recv_res = sys.icc_recv(&response, 1_000_000_000); // 1s timeout
     if (lib.isError(recv_res)) return error.TimedOut;
 
-    if (response.msg_type != InitMsgType.SPAWN_RESULT) return error.invalidProtocol;
+    if (response.msg_type != InitMsgType.SPAWN_RESULT) return error.InvalidProtocol;
 
     // Parse result
+    const id = @as(u64, @bitCast(response.payload[0..8].*));
+    const err = @as(u64, @bitCast(response.payload[8..16].*));
+
+    if (err == 2) return error.UnsafeName;
+    if (err == 3) return error.AlreadyRunning;
+    if (err != 0) return error.SpawnFailed;
+
+    return id;
+}
+
+/// Spawn a container by name with arguments
+/// argv_data is a packed null-separated argument buffer ("arg0\0arg1\0arg2\0")
+/// Returns the container ID on success
+pub fn spawnWithArgs(name: []const u8, argv_data: []const u8) !u64 {
+    // Payload format: name + 0xFF separator + argv_data
+    const total = name.len + 1 + argv_data.len;
+    if (total > 240) return error.NameTooLong;
+
+    var msg: IccMessage = undefined;
+    msg.msg_type = InitMsgType.SPAWN_WITH_ARGS;
+    msg.flags = 0;
+    @memset(&msg.payload, 0);
+
+    @memcpy(msg.payload[0..name.len], name);
+    msg.payload[name.len] = 0xFF; // separator
+    @memcpy(msg.payload[name.len + 1 .. name.len + 1 + argv_data.len], argv_data);
+
+    const send_res = sys.icc_send(INIT_ID, &msg);
+    if (lib.isError(send_res)) return error.IccError;
+
+    var response: IccMessage = undefined;
+    const recv_res = sys.icc_recv(&response, 1_000_000_000);
+    if (lib.isError(recv_res)) return error.TimedOut;
+
+    if (response.msg_type != InitMsgType.SPAWN_RESULT) return error.InvalidProtocol;
+
     const id = @as(u64, @bitCast(response.payload[0..8].*));
     const err = @as(u64, @bitCast(response.payload[8..16].*));
 

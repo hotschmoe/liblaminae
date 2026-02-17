@@ -273,7 +273,7 @@ export fn _start() noreturn {
     // ── 8. Filesystem ─────────────────────────────────
     hdr("8 FS");
     const fn_ = "/tmp/ks.txt";
-    const fd = sys.fs_open(&fn_[0], fn_.len, 0x241);
+    const fd = sys.fs_open(&fn_[0], fn_.len, sys.OpenFlags.WRITE_CREATE_TRUNCATE);
     if (!lib.isError(fd)) {
         ok("open /tmp/ks.txt");
         const dt = "KitchenSink!\n";

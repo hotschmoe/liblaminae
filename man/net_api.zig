@@ -29,7 +29,9 @@
 //------------------------------------------------------------------------------
 
 const sys = @import("../gen/syscalls.zig");
+const errors = @import("../gen/errors.zig");
 const protocol = @import("net_stack_protocol");
+const socket_shm = @import("socket_shm.zig");
 
 // Re-export protocol types for convenience
 pub const MsgType = protocol.MsgType;
@@ -80,6 +82,70 @@ fn toNanoseconds(timeout_ms: u32) u64 {
 //------------------------------------------------------------------------------
 
 var network_manager_id: u16 = 0xFFFF;
+
+//------------------------------------------------------------------------------
+// Socket SHM State
+//------------------------------------------------------------------------------
+
+const SocketShmState = struct {
+    socket: Socket = INVALID_SOCKET,
+    region: ?*volatile socket_shm.SocketShmRegion = null,
+    handle: u64 = 0,
+};
+
+const MAX_SHM_SOCKETS: usize = 8;
+var shm_states: [MAX_SHM_SOCKETS]SocketShmState = [_]SocketShmState{.{}} ** MAX_SHM_SOCKETS;
+
+fn getSocketShm(socket: Socket) ?*SocketShmState {
+    for (&shm_states) |*s| {
+        if (s.socket == socket and s.region != null) return s;
+    }
+    return null;
+}
+
+fn attachSocketShm(socket: Socket, handle: u64) void {
+    const result = sys.map_attach(handle, 1);
+    if (errors.isError(result)) return;
+
+    const region: *volatile socket_shm.SocketShmRegion = @ptrFromInt(result);
+    if (!region.validate()) {
+        _ = sys.map_detach(handle);
+        return;
+    }
+
+    // Find free slot
+    for (&shm_states) |*s| {
+        if (s.socket == INVALID_SOCKET) {
+            s.socket = socket;
+            s.region = region;
+            s.handle = handle;
+
+            // Send accept
+            var msg: sys.Message = undefined;
+            msg.msg_type = MsgType.SOCKET_SHM_ACCEPT;
+            msg.flags = 0;
+            @memset(&msg.payload, 0);
+            msg.payload[0] = @truncate(socket);
+            msg.payload[1] = @truncate(socket >> 8);
+            _ = sys.icc_send(network_manager_id, &msg);
+            return;
+        }
+    }
+    // No free slot - detach
+    _ = sys.map_detach(handle);
+}
+
+fn detachSocketShm(socket: Socket) void {
+    for (&shm_states) |*s| {
+        if (s.socket == socket) {
+            if (s.handle != 0) {
+                _ = sys.map_detach(s.handle);
+            }
+            s.* = .{};
+            return;
+        }
+    }
+}
 
 //------------------------------------------------------------------------------
 // Initialization
@@ -140,6 +206,16 @@ pub fn connect(ip: Ipv4, port: u16, proto: Protocol, timeout_ms: u32) SocketErro
     if (result.error_code != ErrorCode.SUCCESS) {
         return ErrorCode.toError(result.error_code) orelse SocketError.Unknown;
     }
+
+    // Check for SHM offer (sent immediately after CONNECT_RESULT by c_lwIP)
+    const offer_result = sys.icc_recv(&msg, 5_000_000); // 5ms
+    if (!errors.isError(offer_result) and msg.msg_type == MsgType.SOCKET_SHM_OFFER) {
+        const offer = protocol.ShmOfferPayload.deserialize(&msg.payload);
+        if (offer.socket_id == result.socket) {
+            attachSocketShm(result.socket, offer.handle);
+        }
+    }
+
     return result.socket;
 }
 
@@ -174,6 +250,57 @@ pub fn send(socket: Socket, data: []const u8, timeout_ms: u32) SocketError!usize
 pub fn recv(socket: Socket, buf: []u8, timeout_ms: u32) SocketError!usize {
     if (buf.len == 0) return 0;
 
+    // SHM fast path: read directly from shared memory ring
+    if (getSocketShm(socket)) |state| {
+        return recvShm(state, buf, timeout_ms);
+    }
+
+    // ICC fallback path
+    return recvIcc(socket, buf, timeout_ms);
+}
+
+fn recvShm(state: *SocketShmState, buf: []u8, timeout_ms: u32) SocketError!usize {
+    const region = state.region orelse return SocketError.NotConnected;
+
+    // Try immediate read
+    const n = region.recv_ring.read(buf);
+    if (n > 0) return n;
+
+    // Ring empty - wait for DATA_READY notification
+    const timeout_ns: u64 = if (timeout_ms == 0)
+        50_000_000 // 50ms poll for infinite timeout
+    else
+        @as(u64, timeout_ms) * 1_000_000;
+
+    const deadline = sys.get_time() +% timeout_ns;
+    var attempts: u32 = 0;
+    while (attempts < 1000) : (attempts += 1) {
+        const now = sys.get_time();
+        if (timeout_ms != 0 and now >= deadline) break;
+
+        const wait_time: u64 = if (timeout_ms == 0)
+            50_000_000
+        else
+            @min(deadline -| now, 50_000_000);
+
+        _ = sys.wait_event(0, 1, 0, wait_time);
+
+        // Drain the ICC notification (DATA_READY or other)
+        var msg: sys.Message = undefined;
+        _ = sys.icc_recv(&msg, 0);
+
+        // Check ring again
+        const n2 = region.recv_ring.read(buf);
+        if (n2 > 0) return n2;
+
+        // For infinite timeout, keep looping
+        if (timeout_ms == 0) continue;
+    }
+
+    return if (timeout_ms == 0) SocketError.WouldBlock else SocketError.TimedOut;
+}
+
+fn recvIcc(socket: Socket, buf: []u8, timeout_ms: u32) SocketError!usize {
     var msg: sys.Message = undefined;
     msg.msg_type = MsgType.RECV;
     msg.flags = 0;
@@ -209,6 +336,9 @@ pub fn recv(socket: Socket, buf: []u8, timeout_ms: u32) SocketError!usize {
 
 /// Close a socket. Waits for ACK to avoid leaving stale messages in IPC queue.
 pub fn close(socket: Socket) void {
+    // Clean up SHM if present
+    detachSocketShm(socket);
+
     var msg: sys.Message = undefined;
     msg.msg_type = MsgType.CLOSE;
     msg.flags = 0;

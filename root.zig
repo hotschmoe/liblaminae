@@ -13,6 +13,7 @@
 // Hand-written modules (lib/man/)
 pub const net_shm = @import("man/net_shm.zig");
 pub const net_api = @import("man/net_api.zig");
+pub const socket_shm = @import("man/socket_shm.zig");
 pub const virtio = @import("man/virtio.zig");
 pub const init_api = @import("man/init_api.zig");
 pub const net_protocol = @import("man/net_protocol.zig");
@@ -27,6 +28,7 @@ pub const syscalls = @import("gen/syscalls.zig");
 pub const errors = @import("gen/errors.zig");
 
 // Shared modules (lib/shared/) - synced from src/shared/
+pub const shm = @import("shared/shm.zig");
 pub const va_layout = @import("shared/va_layout.zig");
 pub const barriers = @import("shared/arch/barriers_el0.zig");
 pub const idle = @import("shared/arch/idle_el0.zig");

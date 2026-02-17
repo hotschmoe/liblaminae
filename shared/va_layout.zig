@@ -14,6 +14,7 @@
 //   0x20000000 - 0x2FFFFFFF: Device MMIO mappings (drivers)
 //   0x30000000 - 0x3FFFFFFF: Heap (256MB max, grows via sys_brk)
 //   0x40000000 - 0x4FFFFFFF: DMA buffers (256MB, driver containers)
+//   0x50000000 - 0x6FFFFFFF: mmap region (512MB, anonymous mappings)
 //   0x7FFFFF000000:          Stack (grows down)
 //
 // NOTE: Heap is dynamic (grows/shrinks via sys_brk) but has a HARD CAP
@@ -72,6 +73,18 @@ pub const DMA_VA_BASE: u64 = 0x40000000;
 
 /// DMA buffer region size (256MB).
 pub const DMA_VA_SIZE: u64 = 0x10000000;
+
+/// mmap region base (for anonymous mappings via sys_mmap).
+/// Used by Zig's page_allocator and other dynamic mapping needs.
+/// Starts after DMA region to avoid overlap.
+pub const MMAP_VA_BASE: u64 = 0x50000000;
+
+/// mmap region maximum (hard limit).
+/// sys_mmap requests exceeding this are refused.
+pub const MMAP_VA_MAX: u64 = 0x70000000;
+
+/// Maximum mmap region size per container (512MB).
+pub const MMAP_VA_SIZE: u64 = MMAP_VA_MAX - MMAP_VA_BASE;
 
 /// Page size constant (must match kernel).
 pub const PAGE_SIZE: u64 = 4096;

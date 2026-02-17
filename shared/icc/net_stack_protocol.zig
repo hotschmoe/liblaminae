@@ -47,6 +47,20 @@ fn readU32(payload: []const u8, offset: usize) u32 {
         (@as(u32, payload[offset + 3]) << 24);
 }
 
+fn writeU64(payload: []u8, offset: usize, value: u64) void {
+    inline for (0..8) |i| {
+        payload[offset + i] = @truncate(value >> @as(u6, @truncate(i * 8)));
+    }
+}
+
+fn readU64(payload: []const u8, offset: usize) u64 {
+    var result: u64 = 0;
+    inline for (0..8) |i| {
+        result |= @as(u64, payload[offset + i]) << @as(u6, @truncate(i * 8));
+    }
+    return result;
+}
+
 //------------------------------------------------------------------------------
 // Message Types (app <-> network stack)
 //
@@ -225,6 +239,28 @@ pub const MsgType = struct {
     /// Direction: stack -> app
     /// Payload: TestConnectivityResult
     pub const TEST_CONNECTIVITY_RESULT: u16 = 0x2047;
+
+    // === Socket SHM Data Plane (0x2060-0x206F) ===
+
+    /// SHM region offer for socket recv acceleration
+    /// Direction: stack -> app (sent after successful TCP connect)
+    /// Payload: [0:1]=socket_id, [2:9]=shm_handle (u64)
+    pub const SOCKET_SHM_OFFER: u16 = 0x2060;
+
+    /// SHM accept (app attached to region)
+    /// Direction: app -> stack
+    /// Payload: [0:1]=socket_id
+    pub const SOCKET_SHM_ACCEPT: u16 = 0x2061;
+
+    /// Data available in SHM recv ring
+    /// Direction: stack -> app
+    /// Payload: [0:1]=socket_id, [2:5]=bytes_available (u32)
+    pub const SOCKET_DATA_READY: u16 = 0x2062;
+
+    /// SHM channel teardown
+    /// Direction: either side
+    /// Payload: [0:1]=socket_id
+    pub const SOCKET_SHM_DETACH: u16 = 0x2063;
 };
 
 //------------------------------------------------------------------------------
@@ -770,3 +806,46 @@ pub fn isSocketMessage(msg_type: u16) bool {
 pub fn isAbstractOperation(msg_type: u16) bool {
     return msg_type >= 0x2040 and msg_type < 0x2060;
 }
+
+/// Check if a message type is a socket SHM message (0x2060-0x206F)
+pub fn isSocketShmMessage(msg_type: u16) bool {
+    return msg_type >= 0x2060 and msg_type < 0x2070;
+}
+
+// --- Socket SHM Serialization ---
+
+pub const ShmOfferPayload = struct {
+    socket_id: u16,
+    handle: u64,
+
+    pub fn serialize(self: ShmOfferPayload, payload: *[248]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.socket_id);
+        writeU64(payload, 2, self.handle);
+    }
+
+    pub fn deserialize(payload: *const [248]u8) ShmOfferPayload {
+        return .{
+            .socket_id = readU16(payload, 0),
+            .handle = readU64(payload, 2),
+        };
+    }
+};
+
+pub const ShmDataReadyPayload = struct {
+    socket_id: u16,
+    bytes_available: u32,
+
+    pub fn serialize(self: ShmDataReadyPayload, payload: *[248]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.socket_id);
+        writeU32(payload, 2, self.bytes_available);
+    }
+
+    pub fn deserialize(payload: *const [248]u8) ShmDataReadyPayload {
+        return .{
+            .socket_id = readU16(payload, 0),
+            .bytes_available = readU32(payload, 2),
+        };
+    }
+};
