@@ -39,6 +39,7 @@ pub const Syscall = enum(u64) {
     cache_clean_range = 150,
     cache_invalidate_range = 151,
     cache_clean_invalidate_range = 152,
+    set_cpu_quota = 153,
     map_device = 160,
     irq_register = 161,
     irq_ack = 162,
@@ -141,7 +142,7 @@ pub const ContainerStats = extern struct {
     mmap_pages: u32,
     total_pages: u32,
     memory_limit_pages: u32,
-    _pad2: [4]u8,
+    peak_pages: u32,
 
     pub fn getName(self: *const ContainerStats) []const u8 {
         return self.name[0..self.name_len];
@@ -379,6 +380,10 @@ pub inline fn cache_invalidate_range(addr: u64, size: u64) u64 {
 
 pub inline fn cache_clean_invalidate_range(addr: u64, size: u64) u64 {
     return svc2(@intFromEnum(Syscall.cache_clean_invalidate_range), addr, size);
+}
+
+pub inline fn set_cpu_quota(target_container_id: u16, quota_ticks: u64) u64 {
+    return svc2(@intFromEnum(Syscall.set_cpu_quota), target_container_id, quota_ticks);
 }
 
 pub inline fn map_device(phys_addr: u64, size: u64) u64 {
