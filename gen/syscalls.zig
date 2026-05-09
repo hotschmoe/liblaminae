@@ -24,6 +24,7 @@ pub const Syscall = enum(u64) {
     mem_info = 117,
     container_stats = 118,
     set_memory_limit = 119,
+    container_counter_snapshot = 122,
     icc_send = 120,
     icc_recv = 121,
     ns_register = 130,
@@ -147,6 +148,16 @@ pub const ContainerStats = extern struct {
     pub fn getName(self: *const ContainerStats) []const u8 {
         return self.name[0..self.name_len];
     }
+};
+pub const ContainerCounters = extern struct {
+    wake_count: u64,
+    sleep_count: u64,
+    irq_count: u64,
+    icc_send_count: u64,
+    icc_recv_count: u64,
+    deadline_expired_count: u64,
+    page_fault_count: u64,
+    fp_trap_count: u64,
 };
 pub const DirEntry = extern struct {
     name: [64]u8,
@@ -278,8 +289,8 @@ pub inline fn wait_for_exit(container_id: u16) u64 {
     return svc1(@intFromEnum(Syscall.wait_for_exit), container_id);
 }
 
-pub inline fn read(fd: u64, buf: *u8, len: u64, flags: u64) u64 {
-    return svc4(@intFromEnum(Syscall.read), fd, @intFromPtr(buf), len, flags);
+pub inline fn read(fd: u64, buf: *u8, len: u64, flags: u64, timeout_ns: u64) u64 {
+    return svc5(@intFromEnum(Syscall.read), fd, @intFromPtr(buf), len, flags, timeout_ns);
 }
 
 pub inline fn get_platform() u64 {
@@ -320,6 +331,10 @@ pub inline fn container_stats(buffer_ptr: *ContainerStats, max_entries: u64) u64
 
 pub inline fn set_memory_limit(target_container_id: u16, limit_pages: u32) u64 {
     return svc2(@intFromEnum(Syscall.set_memory_limit), target_container_id, limit_pages);
+}
+
+pub inline fn container_counter_snapshot(cid: u16, out_ptr: *ContainerCounters) u64 {
+    return svc2(@intFromEnum(Syscall.container_counter_snapshot), cid, @intFromPtr(out_ptr));
 }
 
 pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {

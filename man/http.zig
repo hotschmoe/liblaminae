@@ -23,6 +23,11 @@
 
 const net = @import("net_api.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Built on net_api -- inherits T2 transitively (peer-dependent on
+/// c_lwIP via socket ops).
+pub const tier: u8 = 2;
+
 //------------------------------------------------------------------------------
 // HTTP Types
 //------------------------------------------------------------------------------

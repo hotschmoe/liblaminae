@@ -53,11 +53,11 @@ console.printf("value: {}\n", .{42});
 const sys = @import("liblaminae").sys;
 var buf: [1]u8 = undefined;
 
-// Blocking read (waits for input)
-_ = sys.read(0, &buf[0], 1, 0);
+// Blocking read (waits for input); timeout_ns=0 means infinite block
+_ = sys.read(0, &buf[0], 1, 0, 0);
 
 // Non-blocking read (returns 0 if no data)
-const n = sys.read(0, &buf[0], 1, 1);
+const n = sys.read(0, &buf[0], 1, 1, 0);
 ```
 
 The shell, nano, and login services all use this interface.

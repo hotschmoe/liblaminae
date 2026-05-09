@@ -33,6 +33,11 @@
 
 const shm = @import("../shared/shm.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// SHM primitive composition -- no syscalls, no peer ICC. Caller does the
+/// map_attach / map_detach plumbing.
+pub const tier: u8 = 1;
+
 /// Recv ring capacity (must be power of 2)
 pub const RECV_RING_SIZE: u32 = 32768; // 32KB
 

@@ -37,6 +37,7 @@ pub const Class = enum {
     block,
     gpio,
     rtc,
+    display,
 };
 
 /// Execution container kind (mirrors kernel ContainerType numerics)
@@ -99,21 +100,14 @@ pub const table = [_]CompatEntry{
         .class = .interrupt_controller,
         .handler = .kernel,
         .status = .supported,
-        .notes = "GICv2 (QEMU virt, BCM2711)",
-    },
-    .{
-        .compatible = "arm,gic-400",
-        .class = .interrupt_controller,
-        .handler = .kernel,
-        .status = .supported,
-        .notes = "GICv2 (BCM2711)",
+        .notes = "GICv2 (QEMU virt)",
     },
     .{
         .compatible = "arm,gic-v3",
         .class = .interrupt_controller,
         .handler = .kernel,
         .status = .planned,
-        .notes = "GICv3 (BCM2712, future)",
+        .notes = "GICv3 (planned for Minisforum MS-R1 / CIX CP8180)",
     },
 
     // =========================================================================
@@ -142,7 +136,7 @@ pub const table = [_]CompatEntry{
         .class = .uart,
         .handler = .kernel,
         .status = .supported,
-        .notes = "PL011 UART (QEMU virt, BCM2711)",
+        .notes = "PL011 UART (QEMU virt; expected on MS-R1 CP8180)",
     },
 
     // =========================================================================
@@ -155,7 +149,7 @@ pub const table = [_]CompatEntry{
         .driver_binary = "netd",
         .container_kind = .driver,
         .status = .supported,
-        .notes = "VirtIO-Net over MMIO (QEMU virt, bcm2712 virtio)",
+        .notes = "VirtIO-Net over MMIO (QEMU virt)",
     },
     .{
         .compatible = "virtio,mmio,block",
@@ -168,28 +162,19 @@ pub const table = [_]CompatEntry{
     },
 
     // =========================================================================
-    // Lamina-handled: BCM2711 GENET
+    // Lamina-handled: QEMU fw_cfg (used by ramfbd for ramfb configuration)
     // =========================================================================
-    // NOTE: Using pure-Zig driver
-    // STATUS: Disabled pending TLB invalidation hang investigation (laminae-v3b5)
-    // driver_binary = null prevents spawn while status = .planned
+    // fw_cfg is QEMU's platform configuration interface. ramfbd reads the
+    // file directory to find "etc/ramfb" and configures the framebuffer.
+    // Without -device ramfb, etc/ramfb is absent and ramfbd graceful-exits.
     .{
-        .compatible = "brcm,bcm2711-genet-v5",
-        .class = .network,
+        .compatible = "qemu,fw-cfg-mmio",
+        .class = .display,
         .handler = .lamina,
-        .driver_binary = null, // DISABLED: TLB hang during spawn (was: "genetd")
+        .driver_binary = "ramfbd",
         .container_kind = .driver,
-        .status = .planned,
-        .notes = "BCM2711 GENET Ethernet (RPi4) - primary DTB compat",
-    },
-    .{
-        .compatible = "brcm,genet-v5",
-        .class = .network,
-        .handler = .lamina,
-        .driver_binary = null, // DISABLED: TLB hang during spawn (was: "genetd")
-        .container_kind = .driver,
-        .status = .planned,
-        .notes = "BCM2711 GENET Ethernet (RPi4) - fallback compat string",
+        .status = .supported,
+        .notes = "QEMU fw_cfg MMIO -- ramfbd consumes etc/ramfb when present",
     },
 };
 

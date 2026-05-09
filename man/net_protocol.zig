@@ -12,6 +12,10 @@
 //   msg.msg_type = NetMsgType.REGISTER;
 //------------------------------------------------------------------------------
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Pure constants. Zero syscalls, zero peer ICC.
+pub const tier: u8 = 1;
+
 /// Network driver <-> stack message types (0x1000-0x1006)
 pub const NetMsgType = struct {
     /// RX frame delivered to stack

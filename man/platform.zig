@@ -19,6 +19,11 @@
 
 const sys = @import("../gen/syscalls.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Thin RPC client of the platform container -- bounded-timeout ICC
+/// for clock/power/reset ops. Peer-dependent, hence T2 not T1.
+pub const tier: u8 = 2;
+
 // Platform ICC message types (from schema.zig 0x4000 range)
 pub const Msg = struct {
     // Clock control

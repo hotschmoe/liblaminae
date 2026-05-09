@@ -399,8 +399,6 @@ export fn _start() noreturn {
     w(if (lib.isError(42)) "T" else "F");
     w(" isErr(BASE)=");
     w(if (lib.isError(lib.errors.ERROR_BASE)) "T" else "F");
-    w("\n  CTX_SW=");
-    wh(lib.errors.CONTEXT_SWITCHED);
     w("\n");
 
     // ── Done ──────────────────────────────────────────

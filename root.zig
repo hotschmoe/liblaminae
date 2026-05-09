@@ -15,6 +15,7 @@ pub const net_shm = @import("man/net_shm.zig");
 pub const net_api = @import("man/net_api.zig");
 pub const socket_shm = @import("man/socket_shm.zig");
 pub const virtio = @import("man/virtio.zig");
+pub const fwcfg = @import("man/fwcfg.zig");
 pub const init_api = @import("man/init_api.zig");
 pub const net_protocol = @import("man/net_protocol.zig");
 pub const http = @import("man/http.zig");
@@ -48,3 +49,10 @@ pub const isError = errors.isError;
 
 // Re-export getContainerId for convenience (zero-syscall via TPIDRRO_EL0)
 pub const getContainerId = container_info.getContainerId;
+
+// Tier-contract audit (contracts follow-up item 3). Comptime-only -- the
+// import forces _audit.zig's comptime block to evaluate, which asserts
+// every lib/man/*.zig module declares the right `pub const tier: u8`.
+comptime {
+    _ = @import("_audit.zig");
+}

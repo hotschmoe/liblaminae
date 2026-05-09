@@ -56,20 +56,12 @@ pub const table = [_]PlatformEntry{
         .description = "QEMU virt machine (stub platform, no-op operations)",
     },
 
-    // Raspberry Pi 4 (BCM2711) - VideoCore mailbox for clock/power
-    .{
-        .name = "bcm2711",
-        .compatible = "brcm,bcm2711",
-        .namespace = "platform.bcm2711",
-        .description = "Raspberry Pi 4 (VideoCore mailbox for clock/power)",
-    },
-
-    // Future: Raspberry Pi 5 (BCM2712)
+    // Future: Minisforum MS-R1 (CIX CP8180) - SCMI/ACPI for clock/power
     // .{
-    //     .name = "bcm2712",
-    //     .compatible = "brcm,bcm2712",
-    //     .namespace = "platform.bcm2712",
-    //     .description = "Raspberry Pi 5 (RP1 southbridge + VideoCore)",
+    //     .name = "ms_r1",
+    //     .compatible = "cix,cp8180",
+    //     .namespace = "platform.ms_r1",
+    //     .description = "Minisforum MS-R1 (CIX CP8180, GICv3, SCMI clock/power)",
     // },
 };
 

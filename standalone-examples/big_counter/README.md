@@ -29,7 +29,7 @@ The demo uses Laminae OS's innovative **zero-syscall console output** system:
 ## Building
 
 The project requires:
-- **Zig 0.15.2** or later
+- **Zig 0.16.0** or later
 - **aarch64-freestanding** target
 - **liblaminae** dependency (fetched automatically)
 

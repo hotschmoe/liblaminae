@@ -33,6 +33,11 @@ const errors = @import("../gen/errors.zig");
 const protocol = @import("net_stack_protocol");
 const socket_shm = @import("socket_shm.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Thin RPC client of the c_lwIP network-stack container -- bounded-
+/// timeout ICC for socket ops. Peer-dependent, hence T2 not T1.
+pub const tier: u8 = 2;
+
 // Re-export protocol types for convenience
 pub const MsgType = protocol.MsgType;
 pub const ErrorCode = protocol.ErrorCode;

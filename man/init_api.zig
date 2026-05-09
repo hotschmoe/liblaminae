@@ -9,6 +9,11 @@ const sys = lib.syscalls;
 const IccMessage = sys.Message;
 const errors = lib.errors;
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Thin RPC client of the lamina init container -- bounded-timeout ICC
+/// for spawn/kill/shutdown. Peer-dependent, hence T2 not T1.
+pub const tier: u8 = 2;
+
 /// Init container ID is always 1
 const INIT_ID: u16 = 1;
 

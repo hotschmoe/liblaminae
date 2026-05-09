@@ -28,6 +28,11 @@
 
 const shm = @import("../shared/shm.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// SHM primitive composition -- no syscalls, no peer ICC. Caller plumbs
+/// the netd <-> c_lwIP attachment.
+pub const tier: u8 = 1;
+
 /// Protocol version (v2: generic SHM primitives layout)
 pub const SHM_VERSION: u32 = 2;
 

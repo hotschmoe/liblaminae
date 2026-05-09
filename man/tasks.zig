@@ -35,6 +35,10 @@
 
 const heap = @import("../root.zig").heap;
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Pure user-space cooperative scheduling -- no syscalls, no peer ICC.
+pub const tier: u8 = 1;
+
 /// Task stack size (8KB, 16-byte aligned)
 const TASK_STACK_SIZE: usize = 8192;
 

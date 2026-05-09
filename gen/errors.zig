@@ -4,17 +4,9 @@
 /// Base for error ranges - values at or above this are errors
 pub const ERROR_BASE: u64 = 0xFFFF_FFFF_0000_0000;
 
-/// Special sentinel indicating syscall caused context switch
-pub const CONTEXT_SWITCHED: u64 = 0xCAFE_BABE_C0DE_0000;
-
 /// Check if a return value is an error
 pub fn isError(value: u64) bool {
     return value >= ERROR_BASE;
-}
-
-/// Check if return value is the context-switched sentinel
-pub fn isContextSwitched(value: u64) bool {
-    return value == CONTEXT_SWITCHED;
 }
 
 /// General error codes

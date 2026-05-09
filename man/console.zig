@@ -22,6 +22,10 @@
 const std = @import("std");
 const va_layout = @import("../shared/va_layout.zig");
 
+/// Tier-contract classification (tier_contract.md, audited by `lib/_audit.zig`).
+/// Zero-syscall ring drain + `sys.write` fallback. No peer ICC.
+pub const tier: u8 = 1;
+
 //------------------------------------------------------------------------------
 // Console Ring Buffer (matches kernel structure)
 //------------------------------------------------------------------------------

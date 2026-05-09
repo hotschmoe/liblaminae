@@ -27,6 +27,11 @@
 
 const barriers = @import("../shared/arch/barriers_el0.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// VirtIO MMIO + virtqueue vocabulary -- works on caller-mapped regions
+/// and caller-allocated DMA. No peer ICC.
+pub const tier: u8 = 1;
+
 //==============================================================================
 // VirtIO MMIO Registers (Section 4.2.2 of VirtIO spec)
 //==============================================================================

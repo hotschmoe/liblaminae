@@ -23,6 +23,10 @@
 
 const syscalls = @import("../gen/syscalls.zig");
 
+/// Tier-contract classification (audited by `lib/_audit.zig`).
+/// Bump allocator backed by sys_brk only -- no peer ICC.
+pub const tier: u8 = 1;
+
 /// Heap state - initialized by init() or lazily on first alloc
 var heap_start: usize = 0;
 var heap_break: usize = 0;
