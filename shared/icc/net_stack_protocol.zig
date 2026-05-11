@@ -2,7 +2,7 @@
 // Network Stack Protocol Specification
 //
 // This defines the contract between:
-//   - Network Stack Containers (c_lwIP, or any replacement)
+//   - Network Stack Containers (zmoltcp, or any replacement)
 //   - Application Containers (net_test, shell, browsers, etc.)
 //
 // IMPLEMENTERS: If you're building a network stack, implement all REQUIRED
@@ -261,6 +261,16 @@ pub const MsgType = struct {
     /// Direction: either side
     /// Payload: [0:1]=socket_id
     pub const SOCKET_SHM_DETACH: u16 = 0x2063;
+
+    /// Data queued in SHM send ring -- stack should drain into TCP TX
+    /// Direction: app -> stack (fire-and-forget wake)
+    /// Payload: [0:1]=socket_id, [2:5]=bytes_available (u32)
+    pub const SOCKET_SEND_READY: u16 = 0x2064;
+
+    /// Send ring drained -- write space available
+    /// Direction: stack -> app (wake from backpressure wait)
+    /// Payload: [0:1]=socket_id, [2:5]=bytes_free (u32)
+    pub const SOCKET_WRITE_READY: u16 = 0x2065;
 };
 
 //------------------------------------------------------------------------------
@@ -331,6 +341,10 @@ pub const SocketError = error{
     NotConfigured,
     LinkDown,
     IccError,
+    /// Peer half-closed: TCP FIN received. recv_ring has been fully
+    /// drained; further reads keep returning `EndOfStream`. Caller
+    /// should close the socket.
+    EndOfStream,
     Unknown,
 };
 

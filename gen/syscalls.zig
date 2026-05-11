@@ -27,6 +27,8 @@ pub const Syscall = enum(u64) {
     container_counter_snapshot = 122,
     icc_send = 120,
     icc_recv = 121,
+    icc_peek = 123,
+    icc_recv_typed = 124,
     ns_register = 130,
     ns_lookup = 131,
     ns_wait = 132,
@@ -149,14 +151,30 @@ pub const ContainerStats = extern struct {
         return self.name[0..self.name_len];
     }
 };
+/// Per-container observability counters returned by sys_container_counter_snapshot.
+/// Snapshot is non-atomic on single-CPU QEMU virt; consistent enough for diagnosis use.
 pub const ContainerCounters = extern struct {
+    /// Times this container was woken from a blocked state (counts both
+    /// blocked -> ready transitions and direct blocked -> running handoffs).
     wake_count: u64,
+    /// Voluntary sleeps initiated by sys_sleep.
     sleep_count: u64,
+    /// IRQ-driven wakes targeting this container (e.g. PL011 RX).
     irq_count: u64,
+    /// Mailbox pushes that succeeded (one per message sent).
     icc_send_count: u64,
+    /// Messages popped from this container's mailbox via sys_icc_recv.
+    /// Counts messages consumed, not syscall invocations -- a recv that
+    /// blocks then retries on wake counts as one increment, not two.
     icc_recv_count: u64,
+    /// Times a deadline-bearing block woke via timeout rather than event.
     deadline_expired_count: u64,
+    /// User-space data/instruction aborts that crashed this container.
+    /// Stack-guard recovery is excluded.
     page_fault_count: u64,
+    /// Successful first-use SIMD enables (FPEN trap -> buffer alloc OK).
+    /// Failed allocs / null-tcb halts appear in kernel log instead and
+    /// are not counted here.
     fp_trap_count: u64,
 };
 pub const DirEntry = extern struct {
@@ -343,6 +361,14 @@ pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {
 
 pub inline fn icc_recv(msg_ptr: *Message, timeout_ns: u64) u64 {
     return svc2(@intFromEnum(Syscall.icc_recv), @intFromPtr(msg_ptr), timeout_ns);
+}
+
+pub inline fn icc_peek(msg_ptr: *Message) u64 {
+    return svc1(@intFromEnum(Syscall.icc_peek), @intFromPtr(msg_ptr));
+}
+
+pub inline fn icc_recv_typed(msg_ptr: *Message, expected_type: u16, timeout_ns: u64) u64 {
+    return svc3(@intFromEnum(Syscall.icc_recv_typed), @intFromPtr(msg_ptr), expected_type, timeout_ns);
 }
 
 pub inline fn ns_register(name_ptr: *const u8, name_len: u64) u64 {

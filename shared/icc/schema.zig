@@ -117,6 +117,23 @@ pub const ranges = [_]MessageRange{
         },
     },
     .{
+        .name = "wasm3 driver (app <-> wasm_prime)",
+        .start = 0x5000,
+        .end = 0x5091,
+        .desc = "Wasm module load/call/unload + service rename + ping/pong. Numeric range was 0x3000-0x3091 prior to C8.2 (2026-05-09); moved here to disambiguate from blk.driver and lamina init which both also claimed 0x3000+.",
+        .messages = &.{
+            .{ .id = 0x5000, .name = "LOAD_MODULE", .direction = "app -> wasm_prime", .desc = "Load wasm bytes from a path" },
+            .{ .id = 0x5001, .name = "LOAD_RESULT", .direction = "wasm_prime -> app", .desc = "Load reply; payload[0]=status (0 ok, 1 err), payload[1..] error string on err" },
+            .{ .id = 0x5010, .name = "CALL_FUNC", .direction = "app -> wasm_prime", .desc = "Invoke an exported function by name" },
+            .{ .id = 0x5011, .name = "CALL_RESULT", .direction = "wasm_prime -> app", .desc = "Call reply; payload[0]=status (0 ok, 1 err), payload[1..] captured stdout on ok" },
+            .{ .id = 0x5020, .name = "UNLOAD", .direction = "app -> wasm_prime", .desc = "Discard the loaded module" },
+            .{ .id = 0x5030, .name = "SET_NAME", .direction = "app -> wasm_prime", .desc = "Rename the running instance in the namespace" },
+            .{ .id = 0x5031, .name = "SET_NAME_OK", .direction = "wasm_prime -> app", .desc = "Rename succeeded" },
+            .{ .id = 0x5090, .name = "PING", .direction = "app -> wasm_prime", .desc = "Liveness probe" },
+            .{ .id = 0x5091, .name = "PONG", .direction = "wasm_prime -> app", .desc = "Liveness ack" },
+        },
+    },
+    .{
         .name = "Platform Services (driver <-> platform)",
         .start = 0x4000,
         .end = 0x4035,

@@ -25,11 +25,10 @@ pub const tier: u8 = 1;
 // Register offsets within the fw_cfg MMIO window
 //------------------------------------------------------------------------------
 
-// FW_CFG_DATA    = +0x00  (u8 read/write, bytewise -- not used here)
-// FW_CFG_SEL     = +0x08  (u16 BE write)
+// FW_CFG_DATA    = +0x00  (u8 read/write, bytewise -- not used; DMA covers all access)
+// FW_CFG_SEL     = +0x08  (u16 BE write -- not used; DMA_CTL_SELECT covers selector latch)
 // FW_CFG_DMA     = +0x10  (u64 BE write -- GPA of DmaAccess struct)
 
-const REG_SELECTOR: u32 = 0x08;
 const REG_DMA: u32 = 0x10;
 
 //------------------------------------------------------------------------------
@@ -106,27 +105,8 @@ pub const Error = error{
 // Internal helpers
 //------------------------------------------------------------------------------
 
-inline fn selReg(va_base: u64) *volatile u16 {
-    return @ptrFromInt(va_base + REG_SELECTOR);
-}
-
 inline fn dmaReg(va_base: u64) *volatile u64 {
     return @ptrFromInt(va_base + REG_DMA);
-}
-
-/// Latch `sel` into the fw_cfg selector register. The register is big-endian.
-fn select(va_base: u64, sel: u16) void {
-    selReg(va_base).* = @byteSwap(sel);
-}
-
-/// Read `len` bytes sequentially from the data register (offset 0x00).
-/// Used only for the file-dir count header, which has no DMA shortcut.
-fn readBytewise(va_base: u64, buf: [*]u8, len: usize) void {
-    const data: *volatile u8 = @ptrFromInt(va_base);
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        buf[i] = data.*;
-    }
 }
 
 /// Submit `access` (whose GPA is `access_pa`) to the DMA register and verify
@@ -233,24 +213,51 @@ pub fn read(va_base: u64, sel: Selector, buf: []u8) Error!void {
 /// `name` is compared against the null-padded 56-byte name field; both
 /// null-terminated and exact-length matches are accepted.
 ///
-/// Note: the file-dir count header is read bytewise (4 bytes). This is the
-/// one place where bytewise access is safe: the count is written before any
-/// file entries, and QEMU does not use a write callback for selector 0x0019.
-/// The entries themselves are read bytewise for the same reason -- this is a
-/// read-only metadata selector, not a writable file, so DMA READ would
-/// require a staging page per entry; bytewise is simpler and correct here.
+/// Implementation: a single DMA read pulls the entire file-dir blob (4-byte
+/// count header + count * 64-byte entries) into one staging page, then walks
+/// the in-memory copy. QEMU's virt machine has 32 file slots by default
+/// (FW_CFG_FILE_SLOTS_DFLT in QEMU's hw/nvram/fw_cfg.c), so 4 + 32*64 = 2052
+/// bytes covers the worst case. We read the cap directly; QEMU stops
+/// transferring once the actual blob ends and leaves the rest of the
+/// buffer untouched. Walking exactly `count` entries from the parsed header
+/// is safe regardless of how much trailing space went unused.
 pub fn findFile(va_base: u64, name: []const u8) Error!?u16 {
-    select(va_base, @intFromEnum(Selector.file_dir));
+    // Cap matches QEMU's FW_CFG_FILE_SLOTS_DFLT. If a future QEMU configures
+    // more slots, count will exceed this and we surface the failure rather
+    // than silently truncating the search.
+    const MAX_ENTRIES: u32 = 32;
+    const FILE_DIR_BYTES: u32 = 4 + MAX_ENTRIES * @sizeOf(FileEntry);
 
-    // First 4 bytes: entry count, big-endian.
-    var count_buf: [4]u8 = undefined;
-    readBytewise(va_base, &count_buf, 4);
-    const count = @byteSwap(@as(u32, @bitCast(count_buf)));
+    const dma_r = sys.alloc_dma(0x1000);
+    if (@as(i64, @bitCast(dma_r)) < 0) return Error.DmaAllocFailed;
+
+    const bus = sys.DmaResult.busAddr(dma_r);
+    const va = sys.DmaResult.va(dma_r);
+
+    // Layout for variable-size reads: payload at offset 0, DmaAccess parked
+    // at the end of the page. The struct's 24 bytes never overlap the
+    // FILE_DIR_BYTES (2052) payload.
+    const PAYLOAD_OFF: u64 = 0;
+    const ACCESS_OFF: u64 = 0x1000 - 64;
+
+    const ctl: u32 = (@as(u32, @intFromEnum(Selector.file_dir)) << 16) | DMA_CTL_SELECT | DMA_CTL_READ;
+    const access: *DmaAccess = @ptrFromInt(va + ACCESS_OFF);
+    access.* = .{
+        .control = @byteSwap(ctl),
+        .length = @byteSwap(FILE_DIR_BYTES),
+        .address = @byteSwap(bus + PAYLOAD_OFF),
+    };
+
+    try submitAndCheck(va_base, va + ACCESS_OFF, bus + ACCESS_OFF);
+
+    const buf: [*]const u8 = @ptrFromInt(va + PAYLOAD_OFF);
+    const count_be: u32 = @bitCast(buf[0..4].*);
+    const count = @byteSwap(count_be);
+    if (count > MAX_ENTRIES) return Error.DmaTransferFailed;
 
     var i: u32 = 0;
     while (i < count) : (i += 1) {
-        var entry: FileEntry = undefined;
-        readBytewise(va_base, @ptrCast(&entry), @sizeOf(FileEntry));
+        const entry: *const FileEntry = @ptrCast(buf + 4 + i * @sizeOf(FileEntry));
         if (nameMatches(entry.name, name)) {
             return @byteSwap(entry.select);
         }

@@ -86,5 +86,11 @@ pub const MMAP_VA_MAX: u64 = 0x70000000;
 /// Maximum mmap region size per container (512MB).
 pub const MMAP_VA_SIZE: u64 = MMAP_VA_MAX - MMAP_VA_BASE;
 
-/// Page size constant (must match kernel).
+/// Canonical PAGE_SIZE for AArch64 4KB granule. Other modules re-export
+/// from here. Bumping to 16K also requires updating TCR_EL1 TG0/TG1 in
+/// `src/arch/aarch64/common/mmu.zig`.
 pub const PAGE_SIZE: u64 = 4096;
+
+comptime {
+    if (PAGE_SIZE != 4096) @compileError("PAGE_SIZE must be 4096 for AArch64 4KB granule");
+}

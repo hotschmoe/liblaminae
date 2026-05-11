@@ -22,6 +22,7 @@
 //------------------------------------------------------------------------------
 
 const syscalls = @import("../gen/syscalls.zig");
+const va_layout = @import("../shared/va_layout.zig");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
 /// Bump allocator backed by sys_brk only -- no peer ICC.
@@ -36,8 +37,7 @@ var initialized: bool = false;
 /// Alignment for all allocations (8 bytes for 64-bit)
 const ALIGNMENT: usize = 8;
 
-/// Page size (must match kernel)
-const PAGE_SIZE: usize = 4096;
+const PAGE_SIZE: usize = va_layout.PAGE_SIZE;
 
 /// Maximum heap size (256MB)
 const MAX_HEAP_SIZE: usize = 256 * 1024 * 1024;

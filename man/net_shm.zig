@@ -2,12 +2,12 @@
 // Shared Memory Network Data Plane
 //
 // Composes from generic SHM primitives (lib/shared/shm.zig) to provide
-// the packet transport layer between netd and c_lwIP.
+// the packet transport layer between netd and zmoltcp.
 //
 // Architecture:
-//   +--------+                     +--------+
-//   |  netd  |                     | c_lwIP |
-//   +--------+                     +--------+
+//   +--------+                     +---------+
+//   |  netd  |                     | zmoltcp |
+//   +--------+                     +---------+
 //        |                              |
 //        v                              v
 //   +------------------------------------------------+
@@ -18,19 +18,19 @@
 //   +------------------------------------------------+
 //
 // Data Flow:
-//   RX (wire -> c_lwIP): netd writes to RX ring, c_lwIP reads
-//   TX (c_lwIP -> wire): c_lwIP writes to TX ring, netd reads
+//   RX (wire -> zmoltcp): netd writes to RX ring, zmoltcp reads
+//   TX (zmoltcp -> wire): zmoltcp writes to TX ring, netd reads
 //
 // Signaling (still via ICC):
-//   - SHM_RX_READY: netd notifies c_lwIP of new RX packets
-//   - SHM_TX_READY: c_lwIP notifies netd of new TX packets
+//   - SHM_RX_READY: netd notifies zmoltcp of new RX packets
+//   - SHM_TX_READY: zmoltcp notifies netd of new TX packets
 //------------------------------------------------------------------------------
 
 const shm = @import("../shared/shm.zig");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
 /// SHM primitive composition -- no syscalls, no peer ICC. Caller plumbs
-/// the netd <-> c_lwIP attachment.
+/// the netd <-> zmoltcp attachment.
 pub const tier: u8 = 1;
 
 /// Protocol version (v2: generic SHM primitives layout)
@@ -76,7 +76,7 @@ pub const SharedNetBuffer = extern struct {
         self.pool.init();
     }
 
-    /// Validate the shared buffer (called by attacher - c_lwIP)
+    /// Validate the shared buffer (called by attacher - zmoltcp)
     pub fn validate(self: *volatile SharedNetBuffer) bool {
         return self.header.validate();
     }

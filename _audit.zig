@@ -26,17 +26,23 @@
 //
 // Limitations:
 //   - We don't comptime-verify "T1 module doesn't import T2 module": Zig
-//     doesn't expose source-text introspection at comptime, and a runtime
-//     check would defeat the point. The tier tag is a load-bearing
-//     reviewer signal, not a blanket enforcement. Adding `@import("init_api.zig")`
-//     to a T1 module is still a code review concern. (A `tools/check_t1_imports.zig`
-//     CI script could fill this gap by grepping; not yet built.)
+//     doesn't expose source-text introspection at comptime. Two build-time
+//     gates fill this gap, both wired into the default build:
+//       * `tools/check_tier_imports.zig` (item C8.10) -- scans every
+//         `lib/man/*.zig` for `@import("...<peer>_client/...")` and fails
+//         the build on hit.
+//       * `tools/check_client_isolation.zig` (item C8.16) -- scans every
+//         `lib/<peer>_client/*.zig` for cross-client `@import("..._client/")`
+//         targeting a different peer; `init_client/` is exempt as the
+//         universal spawn orchestrator.
 //
 //------------------------------------------------------------------------------
 
 const std = @import("std");
 
 /// T1 modules: vocabulary, T0 syscalls only, no peer ICC.
+/// `rpc` is the generic RPC primitive — itself parameterized over peer,
+/// so vocabulary by construction; per-peer instantiations are T2.
 const t1_modules = struct {
     pub const console = @import("man/console.zig");
     pub const heap = @import("man/heap.zig");
@@ -46,14 +52,21 @@ const t1_modules = struct {
     pub const socket_shm = @import("man/socket_shm.zig");
     pub const net_shm = @import("man/net_shm.zig");
     pub const net_protocol = @import("man/net_protocol.zig");
+    pub const rpc = @import("man/rpc.zig");
+    pub const http = @import("man/http.zig");
+    pub const socket_stream = @import("man/socket_stream.zig");
 };
 
 /// T2 modules: thin RPC clients of peer containers, bounded-timeout ICC.
+/// Each lives in its own per-peer namespace (`lib/<peer>_client/`) so the
+/// directory itself documents the tier — `lib/man/` is strict T1.
 const t2_modules = struct {
-    pub const init_api = @import("man/init_api.zig");
-    pub const net_api = @import("man/net_api.zig");
-    pub const http = @import("man/http.zig");
-    pub const platform = @import("man/platform.zig");
+    pub const init_client = @import("init_client/api.zig");
+    pub const platform_client = @import("platform_client/api.zig");
+    pub const blk_client = @import("blk_client/api.zig");
+    pub const wasm_client = @import("wasm_client/api.zig");
+    pub const net_client = @import("net_client/api.zig");
+    pub const http_client = @import("net_client/http_transport.zig");
 };
 
 comptime {
@@ -61,11 +74,11 @@ comptime {
     for (std.meta.declarations(t1_modules)) |decl| {
         const m = @field(t1_modules, decl.name);
         if (!@hasDecl(m, "tier")) {
-            @compileError("lib/man/" ++ decl.name ++ ".zig is in t1_modules but has no `pub const tier: u8` decl");
+            @compileError("t1_modules member `" ++ decl.name ++ "` has no `pub const tier: u8` decl");
         }
         if (m.tier != 1) {
             @compileError(std.fmt.comptimePrint(
-                "lib/man/{s}.zig is in t1_modules but declares tier = {d} (expected 1)",
+                "t1_modules member `{s}` declares tier = {d} (expected 1)",
                 .{ decl.name, m.tier },
             ));
         }
@@ -75,11 +88,11 @@ comptime {
     for (std.meta.declarations(t2_modules)) |decl| {
         const m = @field(t2_modules, decl.name);
         if (!@hasDecl(m, "tier")) {
-            @compileError("lib/man/" ++ decl.name ++ ".zig is in t2_modules but has no `pub const tier: u8` decl");
+            @compileError("t2_modules member `" ++ decl.name ++ "` has no `pub const tier: u8` decl");
         }
         if (m.tier != 2) {
             @compileError(std.fmt.comptimePrint(
-                "lib/man/{s}.zig is in t2_modules but declares tier = {d} (expected 2)",
+                "t2_modules member `{s}` declares tier = {d} (expected 2)",
                 .{ decl.name, m.tier },
             ));
         }

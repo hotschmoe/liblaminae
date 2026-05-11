@@ -56,13 +56,14 @@ pub const table = [_]PlatformEntry{
         .description = "QEMU virt machine (stub platform, no-op operations)",
     },
 
-    // Future: Minisforum MS-R1 (CIX CP8180) - SCMI/ACPI for clock/power
-    // .{
-    //     .name = "ms_r1",
-    //     .compatible = "cix,cp8180",
-    //     .namespace = "platform.ms_r1",
-    //     .description = "Minisforum MS-R1 (CIX CP8180, GICv3, SCMI clock/power)",
-    // },
+    // Minisforum MS-R1 (CIX CP8180) - SCMI/ACPI for clock/power
+    // Scaffold container; real SCMI dispatch lands in Phase 3.
+    .{
+        .name = "ms_r1",
+        .compatible = "cix,cp8180",
+        .namespace = "platform.ms_r1",
+        .description = "Minisforum MS-R1 (CIX CP8180, GICv3, SCMI clock/power)",
+    },
 };
 
 //------------------------------------------------------------------------------

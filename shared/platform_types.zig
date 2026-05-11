@@ -21,6 +21,10 @@
 pub const PlatformType = enum(u64) {
     /// QEMU virt machine (default development target)
     qemu_virt = 0,
+    /// Minisforum MS-R1 (CIX CP8180). Real-hardware target; v1.0 goal.
+    /// Bring-up scaffolding only at the user-container level today;
+    /// kernel-side (GICv3, SCMI, EFI memmap) lands in Phase 3.
+    ms_r1 = 1,
     /// Unknown platform (fallback). Preserved at 4 for ABI stability across
     /// the BCM2711/BCM2712/Tegra enum-removal migration.
     unknown = 4,
@@ -29,6 +33,7 @@ pub const PlatformType = enum(u64) {
     pub fn fromSyscall(value: u64) PlatformType {
         return switch (value) {
             0 => .qemu_virt,
+            1 => .ms_r1,
             else => .unknown,
         };
     }
@@ -39,11 +44,9 @@ pub const PlatformType = enum(u64) {
     }
 
     /// Check if running on real hardware (not emulated).
-    /// Currently always false: the only registered non-QEMU target (MS-R1)
-    /// is not yet wired into the syscall ABI. Will return true for MS-R1
-    /// once added.
     pub fn isRealHardware(self: PlatformType) bool {
         return switch (self) {
+            .ms_r1 => true,
             .qemu_virt, .unknown => false,
         };
     }
@@ -53,6 +56,7 @@ pub const PlatformType = enum(u64) {
     pub fn getName(self: PlatformType) []const u8 {
         return switch (self) {
             .qemu_virt => "virt",
+            .ms_r1 => "ms_r1",
             .unknown => "virt", // fallback to virt stub
         };
     }

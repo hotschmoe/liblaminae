@@ -4,7 +4,7 @@
 // This file exports the message types for driver <-> network stack communication.
 // These values come from src/shared/ipc/schema.zig and should be used by:
 // - genetd, netd (network drivers)
-// - c_lwIP (network stack)
+// - zmoltcp (network stack)
 //
 // Usage:
 //   const lib = @import("liblaminae");

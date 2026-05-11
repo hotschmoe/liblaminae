@@ -10,19 +10,30 @@
 //   lib.va_layout.HEAP_VA_BASE;
 //------------------------------------------------------------------------------
 
-// Hand-written modules (lib/man/)
-pub const net_shm = @import("man/net_shm.zig");
-pub const net_api = @import("man/net_api.zig");
-pub const socket_shm = @import("man/socket_shm.zig");
-pub const virtio = @import("man/virtio.zig");
-pub const fwcfg = @import("man/fwcfg.zig");
-pub const init_api = @import("man/init_api.zig");
-pub const net_protocol = @import("man/net_protocol.zig");
-pub const http = @import("man/http.zig");
+// T1 vocabulary modules (lib/man/) — pure, peer-free, T0 syscalls only
 pub const console = @import("man/console.zig");
-pub const platform = @import("man/platform.zig");
 pub const heap = @import("man/heap.zig");
 pub const tasks = @import("man/tasks.zig");
+pub const fwcfg = @import("man/fwcfg.zig");
+pub const virtio = @import("man/virtio.zig");
+pub const socket_shm = @import("man/socket_shm.zig");
+pub const net_shm = @import("man/net_shm.zig");
+pub const net_protocol = @import("man/net_protocol.zig");
+pub const rpc = @import("man/rpc.zig");
+pub const http = @import("man/http.zig");
+pub const socket_stream = @import("man/socket_stream.zig");
+
+// T2 RPC client modules — thin clients of named peer containers
+pub const init_client = @import("init_client/api.zig");
+pub const init_protocol = @import("init_protocol");
+pub const platform_client = @import("platform_client/api.zig");
+pub const platform_protocol = @import("platform_protocol");
+pub const blk_client = @import("blk_client/api.zig");
+pub const blk_protocol = @import("blk_protocol");
+pub const wasm_client = @import("wasm_client/api.zig");
+pub const wasm_protocol = @import("wasm_protocol");
+pub const net_client = @import("net_client/api.zig");
+pub const http_client = @import("net_client/http_transport.zig");
 
 // Generated modules (lib/gen/) - from kernel tables
 pub const syscalls = @import("gen/syscalls.zig");
@@ -38,6 +49,8 @@ pub const compat = @import("shared/compat/table.zig");
 pub const platform_table = @import("shared/platform/table.zig");
 pub const icc_schema = @import("shared/icc/schema.zig");
 pub const filetypes = @import("shared/filetypes.zig");
+pub const container_type = @import("shared/container_type.zig");
+pub const ContainerType = container_type.ContainerType;
 
 // Shared protocol specifications (build.zig provides module mapping)
 pub const net_stack_protocol = @import("net_stack_protocol");

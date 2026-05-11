@@ -1,6 +1,6 @@
 .{
     .name = .liblaminae,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .minimum_zig_version = "0.16.0",
     .paths = .{
         "build.zig",
@@ -8,6 +8,11 @@
         "root.zig",
         "gen",
         "man",
+        "init_client",
+        "blk_client",
+        "net_client",
+        "platform_client",
+        "wasm_client",
         "shared",
     },
 }
