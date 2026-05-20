@@ -29,12 +29,15 @@ pub const Syscall = enum(u64) {
     icc_recv = 121,
     icc_peek = 123,
     icc_recv_typed = 124,
+    ring_arm = 125,
+    ring_wake = 126,
     ns_register = 130,
     ns_lookup = 131,
     ns_wait = 132,
     map_create = 140,
     map_attach = 141,
     map_detach = 142,
+    map_handle = 147,
     mmap = 144,
     munmap = 145,
     mprotect = 146,
@@ -228,11 +231,11 @@ pub const IoVec = extern struct {
     len: u64,
 };
 
-/// Helpers for unpacking the packed return value from map_create.
-/// map_create returns (handle << 32) | (va & 0xFFFFFFFF).
+/// Helpers for unpacking the packed return value from map_create and map_attach.
+/// Both return (token << 32) | (va & 0xFFFFFFFF). Token is u32, va is u32.
 pub const MapResult = struct {
-    pub inline fn handle(result: u64) u64 {
-        return result >> 32;
+    pub inline fn token(result: u64) u32 {
+        return @truncate(result >> 32);
     }
     pub inline fn va(result: u64) u64 {
         return result & 0xFFFFFFFF;
@@ -255,10 +258,31 @@ pub const WakeReason = enum(u64) {
     icc = 2,
     timeout = 3,
     peer_crashed = 4,
+    ring = 5,
+    closed = 6,
     @"error" = 0xFFFFFFFF,
+};
 
-    pub fn fromU64(val: u64) WakeReason {
-        return @enumFromInt(val);
+pub const WakeEvent = union(WakeReason) {
+    irq: u32,
+    icc: void,
+    timeout: void,
+    peer_crashed: u16,
+    ring: u32,
+    closed: u32,
+    @"error": void,
+
+    pub fn unpack(tag: u64, payload: u64) WakeEvent {
+        const reason: WakeReason = @enumFromInt(tag);
+        return switch (reason) {
+            .irq => .{ .irq = @truncate(payload) },
+            .icc => .icc,
+            .timeout => .timeout,
+            .peer_crashed => .{ .peer_crashed = @truncate(payload) },
+            .ring => .{ .ring = @truncate(payload) },
+            .closed => .{ .closed = @truncate(payload) },
+            .@"error" => .@"error",
+        };
     }
 };
 
@@ -315,8 +339,18 @@ pub inline fn get_platform() u64 {
     return svc0(@intFromEnum(Syscall.get_platform));
 }
 
-pub inline fn wait_event(irq_mask: u32, mailbox_id: u16, flags: u16, timeout_ns: u64) u64 {
-    return svc4(@intFromEnum(Syscall.wait_event), irq_mask, mailbox_id, flags, timeout_ns);
+pub inline fn wait_event(irq_mask: u32, mailbox_id: u16, flags: u16, timeout_ns: u64) WakeEvent {
+    var x1_out: u64 = undefined;
+    const x0_out = asm volatile ("svc #0"
+        : [r0] "={x0}" (-> u64),
+          [r1] "={x1}" (x1_out),
+        : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.wait_event))),
+          [a0] "{x0}" (@as(u64, irq_mask)),
+          [a1] "{x1}" (@as(u64, mailbox_id)),
+          [a2] "{x2}" (@as(u64, flags)),
+          [a3] "{x3}" (timeout_ns),
+        : .{ .memory = true });
+    return WakeEvent.unpack(x0_out, x1_out);
 }
 
 pub inline fn console_ctl(op: u64, arg0: u64, arg1: u64) u64 {
@@ -371,6 +405,14 @@ pub inline fn icc_recv_typed(msg_ptr: *Message, expected_type: u16, timeout_ns: 
     return svc3(@intFromEnum(Syscall.icc_recv_typed), @intFromPtr(msg_ptr), expected_type, timeout_ns);
 }
 
+pub inline fn ring_arm(token: u32, ring_va: u64, last_snapshot: u32, direction: u32) u64 {
+    return svc4(@intFromEnum(Syscall.ring_arm), token, ring_va, last_snapshot, direction);
+}
+
+pub inline fn ring_wake(token: u32, direction: u32) u64 {
+    return svc2(@intFromEnum(Syscall.ring_wake), token, direction);
+}
+
 pub inline fn ns_register(name_ptr: *const u8, name_len: u64) u64 {
     return svc2(@intFromEnum(Syscall.ns_register), @intFromPtr(name_ptr), name_len);
 }
@@ -391,8 +433,12 @@ pub inline fn map_attach(handle: u64, perms: u64) u64 {
     return svc2(@intFromEnum(Syscall.map_attach), handle, perms);
 }
 
-pub inline fn map_detach(handle: u64) u64 {
-    return svc1(@intFromEnum(Syscall.map_detach), handle);
+pub inline fn map_detach(token: u32) u64 {
+    return svc1(@intFromEnum(Syscall.map_detach), token);
+}
+
+pub inline fn map_handle(token: u32) u64 {
+    return svc1(@intFromEnum(Syscall.map_handle), token);
 }
 
 pub inline fn mmap(addr: u64, length: u64, prot: u32, flags: u32) u64 {

@@ -241,37 +241,102 @@ pub const MsgType = struct {
     pub const TEST_CONNECTIVITY_RESULT: u16 = 0x2047;
 
     // === Socket SHM Data Plane (0x2060-0x206F) ===
-
-    /// SHM region offer for socket recv acceleration
-    /// Direction: stack -> app (sent after successful TCP connect)
-    /// Payload: [0:1]=socket_id, [2:9]=shm_handle (u64)
-    pub const SOCKET_SHM_OFFER: u16 = 0x2060;
+    //
+    // Note: there used to be a SOCKET_SHM_OFFER (0x2060) message sent
+    // separately after CONNECT_RESULT. It had an inherent race -- the
+    // client had to poll for it within a narrow window after CONNECT_
+    // RESULT, and missed offers leaked SHM regions while poisoning the
+    // mailbox. The handle now travels in CONNECT_RESULT.shm_handle
+    // directly. 0x2060 is reserved for backwards-incompat detection.
 
     /// SHM accept (app attached to region)
     /// Direction: app -> stack
     /// Payload: [0:1]=socket_id
     pub const SOCKET_SHM_ACCEPT: u16 = 0x2061;
 
-    /// Data available in SHM recv ring
-    /// Direction: stack -> app
-    /// Payload: [0:1]=socket_id, [2:5]=bytes_available (u32)
-    pub const SOCKET_DATA_READY: u16 = 0x2062;
+    // 0x2062 RETIRED -- was SOCKET_DATA_READY (stack -> app, "data in recv_ring").
+    // M2c migrated the recv-direction wake to ring-event (sys_ring_wake) on the
+    // app's per-attach token. The id is intentionally not reused.
 
     /// SHM channel teardown
     /// Direction: either side
     /// Payload: [0:1]=socket_id
     pub const SOCKET_SHM_DETACH: u16 = 0x2063;
 
-    /// Data queued in SHM send ring -- stack should drain into TCP TX
-    /// Direction: app -> stack (fire-and-forget wake)
-    /// Payload: [0:1]=socket_id, [2:5]=bytes_available (u32)
+    /// Data queued in SHM send ring -- stack should drain into TCP TX.
+    /// Direction: app -> stack (fire-and-forget eager-drain wake).
+    /// Payload: [0:1]=socket_id, [2:5]=bytes_available (u32).
+    /// Post-C8.17 the alternative (stack arming the send region's
+    /// consumer_waiter every iter) loses the very first wake before the
+    /// stack's mainLoop reaches the arm site, costing a poll-timeout (50ms)
+    /// on the request's hot path. The mailbox notification remains as the
+    /// proven eager-drain path; M2d will revisit ring-event symmetry once
+    /// the stack mainLoop supports multi-ring arm timing without that race.
     pub const SOCKET_SEND_READY: u16 = 0x2064;
 
-    /// Send ring drained -- write space available
-    /// Direction: stack -> app (wake from backpressure wait)
-    /// Payload: [0:1]=socket_id, [2:5]=bytes_free (u32)
+    /// Send ring drained -- write space available.
+    /// Direction: stack -> app (wake from backpressure wait).
+    /// Payload: [0:1]=socket_id, [2:5]=bytes_free (u32).
+    /// C8.17 split SocketShmRegion so the app's WriteStream can also park
+    /// on the send region's producer_waiter (direction=1, sys_ring_arm) for
+    /// pure ring-event backpressure -- the mailbox path is the lower-
+    /// latency fallback when the producer hasn't parked yet.
     pub const SOCKET_WRITE_READY: u16 = 0x2065;
 };
+
+//------------------------------------------------------------------------------
+// Mailbox disposition (C8.18 Option C)
+//
+// `SocketWakeMsg` is a typed enum of the socket-range message ids that may
+// appear at head-of-mailbox in a `ReadStream` / `WriteStream` loop after
+// `sys_wait_event` returns `.icc`. The `dispositionOf` switch is exhaustive
+// over this enum: adding a new wake-class socket message requires extending
+// `SocketWakeMsg` AND adding an explicit `MailboxDisposition` arm, or the
+// build fails.
+//
+// This closes the C8.18 class-of-bug ("`drainOwnWake` swallows by default,
+// silently consuming any future message a contributor forgot to classify").
+// Unknown msg_types are still swallowed at the call site (`drainOwnWake`)
+// for defensive reasons (stale ICC traffic from torn-down sockets), but the
+// branch is now explicit and commented rather than emergent.
+//------------------------------------------------------------------------------
+
+/// Disposition for messages that may sit at head-of-mailbox during a
+/// `ReadStream` / `WriteStream` wait loop.
+pub const MailboxDisposition = enum {
+    /// Consumer must process. Leave at head-of-mailbox.
+    deliver,
+    /// Idempotent wake signal. Caller may swallow when addressed to it;
+    /// must leave queued when addressed to a peer (see `drainOwnWake`).
+    wake_only,
+};
+
+/// Wake-class socket messages that `drainOwnWake` must classify. Adding a
+/// new variant forces a disposition arm in `dispositionOf`. The wire value
+/// matches `MsgType.*`.
+pub const SocketWakeMsg = enum(u16) {
+    send_ready = MsgType.SOCKET_SEND_READY,
+    write_ready = MsgType.SOCKET_WRITE_READY,
+};
+
+/// Compile-time-exhaustive disposition table. New `SocketWakeMsg` variants
+/// must add an arm here -- the absence of an `else` makes this a build error.
+pub fn dispositionOf(msg: SocketWakeMsg) MailboxDisposition {
+    return switch (msg) {
+        .send_ready, .write_ready => .wake_only,
+    };
+}
+
+/// Decode a wire u16 into the typed wake enum. Returns null for msg_types
+/// not in the wake set; callers treat null as "outside our classification"
+/// (the current behavior: defensively swallow at `drainOwnWake`).
+/// Extending `SocketWakeMsg` extends this decoder automatically.
+pub fn socketWakeMsgFromU16(v: u16) ?SocketWakeMsg {
+    inline for (std.meta.tags(SocketWakeMsg)) |t| {
+        if (@intFromEnum(t) == v) return t;
+    }
+    return null;
+}
 
 //------------------------------------------------------------------------------
 // Error Codes
@@ -408,17 +473,29 @@ pub const ConnectRequest = struct {
 pub const ConnectResult = struct {
     socket: Socket,
     error_code: u16,
+    /// Kernel handles for the per-socket SHM regions the stack allocated for
+    /// this connection. C8.17 split the bundled SocketShmRegion into two
+    /// single-ring regions so each gets its own SPSC waiter pair.
+    /// Either handle being 0 means no SHM on that direction (UDP, or the
+    /// stack chose not to offer); the client falls back to ICC RECV/SEND.
+    /// In practice both are 0 or both are non-zero.
+    recv_shm_handle: u64,
+    send_shm_handle: u64,
 
     pub fn serialize(self: ConnectResult, payload: *[248]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         writeU16(payload, 2, self.error_code);
+        writeU64(payload, 4, self.recv_shm_handle);
+        writeU64(payload, 12, self.send_shm_handle);
     }
 
     pub fn deserialize(payload: *const [248]u8) ConnectResult {
         return .{
             .socket = readU16(payload, 0),
             .error_code = readU16(payload, 2),
+            .recv_shm_handle = readU64(payload, 4),
+            .send_shm_handle = readU64(payload, 12),
         };
     }
 };
@@ -827,24 +904,9 @@ pub fn isSocketShmMessage(msg_type: u16) bool {
 }
 
 // --- Socket SHM Serialization ---
-
-pub const ShmOfferPayload = struct {
-    socket_id: u16,
-    handle: u64,
-
-    pub fn serialize(self: ShmOfferPayload, payload: *[248]u8) void {
-        @memset(payload, 0);
-        writeU16(payload, 0, self.socket_id);
-        writeU64(payload, 2, self.handle);
-    }
-
-    pub fn deserialize(payload: *const [248]u8) ShmOfferPayload {
-        return .{
-            .socket_id = readU16(payload, 0),
-            .handle = readU64(payload, 2),
-        };
-    }
-};
+// Note: ShmOfferPayload removed -- SHM handle now travels in
+// ConnectResult.recv_shm_handle / .send_shm_handle (C8.17 split),
+// eliminating the separate-offer-message race.
 
 pub const ShmDataReadyPayload = struct {
     socket_id: u16,

@@ -24,6 +24,13 @@ pub fn dataMemoryBarrierInner() void {
     asm volatile ("dmb ish");
 }
 
+/// Data memory barrier - inner shareable, load-side (acquire-flavored)
+/// Use after a relaxed load whose value gates subsequent loads --
+/// SHM ring consumer reading `head` before consuming `entries[tail]`.
+pub fn dataMemoryBarrierInnerLoad() void {
+    asm volatile ("dmb ishld");
+}
+
 /// Data memory barrier - outer shareable
 pub fn dataMemoryBarrierOuter() void {
     asm volatile ("dmb osh");

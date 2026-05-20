@@ -14,12 +14,24 @@
 //   All ring operations use DMB ISH (inner shareable data memory barrier)
 //   between data access and index updates. This provides release/acquire
 //   semantics for SPSC communication between containers on the same SoC.
+//   Consumer `hasData()` / `availableBytes()` use DMB ISHLD (load-acquire)
+//   so the subsequent data read cannot be reordered before the head load.
+//
+// Layout: producer-owned cache line (head + dropped) is separated from the
+// consumer-owned cache line (tail) by a 64-byte boundary so the steady-state
+// path avoids false sharing on SMP. The contract for both layout and
+// behavior is `docs/architecture/contracts/shm_ring_contract.md`.
 //
 // SOURCE OF TRUTH: This file is copied to lib/shared/ by gen-lib.
 // Do not edit lib/shared/shm.zig directly.
 //------------------------------------------------------------------------------
 
 const barriers = @import("arch/barriers_el0.zig");
+
+/// Cache line size used for producer/consumer index separation.
+/// ARM Cortex-A typical line is 64 bytes. Loose enough that any plausible
+/// ARM64 SoC fits; tight enough that we don't waste pages per ring.
+pub const CACHE_LINE: u32 = 64;
 
 //------------------------------------------------------------------------------
 // RegionHeader - Standard SHM Region Header (32 bytes)
@@ -34,7 +46,9 @@ pub const RegionHeader = extern struct {
     _reserved: [16]u8,
 
     pub const MAGIC: u32 = 0x4C4D5348; // "LMSH"
-    pub const VERSION: u32 = 1;
+    /// v1 = original layout (head/tail/_pad[8]/payload).
+    /// v2 = cache-line split + drop counter (current).
+    pub const VERSION: u32 = 2;
 
     pub const STATE_UNINIT: u32 = 0;
     pub const STATE_READY: u32 = 1;
@@ -75,6 +89,14 @@ comptime {
 // Capacity must be a power of 2. One slot is sacrificed to distinguish
 // empty (head == tail) from full ((head + 1) & mask == tail).
 // Usable capacity is (capacity - 1) entries.
+//
+// Layout (M0.5, version 2):
+//   offset   0:  head      (producer cache line)
+//   offset   4:  dropped   (producer cache line)
+//   offset   8:  _pad_p[56]
+//   offset  64:  tail      (consumer cache line)
+//   offset  68:  _pad_c[60]
+//   offset 128:  entries[capacity]
 //------------------------------------------------------------------------------
 
 pub fn SpscRing(comptime Entry: type, comptime capacity: u32) type {
@@ -83,6 +105,8 @@ pub fn SpscRing(comptime Entry: type, comptime capacity: u32) type {
             @compileError("SpscRing capacity must be a power of 2");
         if (@sizeOf(Entry) == 0)
             @compileError("SpscRing Entry must have non-zero size");
+        if (@alignOf(Entry) > CACHE_LINE)
+            @compileError("SpscRing Entry alignment must be <= 64 bytes");
     }
 
     const mask: u32 = capacity - 1;
@@ -90,31 +114,53 @@ pub fn SpscRing(comptime Entry: type, comptime capacity: u32) type {
     return extern struct {
         const Self = @This();
 
-        head: u32 align(8),
+        // Producer cache line (offset 0..63).
+        head: u32,
+        /// Producer-only writer. Bumped on every `addDrop()` call when a
+        /// producer hits `!hasSpace()`. Monotonic (wraps at u32 max). Read
+        /// freely by consumer for diagnostics; see SR.14-SR.17.
+        dropped: u32,
+        _pad_producer: [CACHE_LINE - 8]u8,
+
+        // Consumer cache line (offset 64..127).
         tail: u32,
-        _pad: [8]u8,
+        _pad_consumer: [CACHE_LINE - 4]u8,
+
+        // Payload (offset 128).
         entries: [capacity]Entry,
 
         pub fn init(self: *volatile Self) void {
             self.head = 0;
+            self.dropped = 0;
+            self._pad_producer = [_]u8{0} ** (CACHE_LINE - 8);
             self.tail = 0;
-            self._pad = [_]u8{0} ** 8;
+            self._pad_consumer = [_]u8{0} ** (CACHE_LINE - 4);
         }
 
+        /// Consumer-side empty check. Uses load-acquire on `head` so a
+        /// subsequent `consume()` (or `peek()`) cannot read stale `entries[tail]`
+        /// from before the producer's release-barrier in `produce()`.
         pub fn hasData(self: *volatile Self) bool {
-            return self.head != self.tail;
+            const h = self.head;
+            barriers.dataMemoryBarrierInnerLoad();
+            return h != self.tail;
         }
 
+        /// Producer-side space check. Relaxed read of `tail` is fine -- the
+        /// only hazard a stale value creates is a spurious `false` (we treat
+        /// the ring as full and drop / wait), which is safe.
         pub fn hasSpace(self: *volatile Self) bool {
             return ((self.head + 1) & mask) != self.tail;
         }
 
         pub fn available(self: *volatile Self) u32 {
-            return (self.head -% self.tail) & mask;
+            const h = self.head;
+            barriers.dataMemoryBarrierInnerLoad();
+            return (h -% self.tail) & mask;
         }
 
         pub fn freeSlots(self: *volatile Self) u32 {
-            return capacity - 1 - self.available();
+            return capacity - 1 - ((self.head -% self.tail) & mask);
         }
 
         /// Write entry to the ring. Caller MUST check hasSpace() first.
@@ -123,6 +169,14 @@ pub fn SpscRing(comptime Entry: type, comptime capacity: u32) type {
             self.entries[idx] = entry;
             barriers.dataMemoryBarrierInner();
             self.head = (idx + 1) & mask;
+        }
+
+        /// Bump the drop counter. Call when a `produce()` is skipped because
+        /// `hasSpace()` returned false. Producer-only writer; wraps at u32 max.
+        /// SR.15-SR.16: the counter is monotonic informational accounting --
+        /// it does NOT prevent the drop, only records that it happened.
+        pub fn addDrop(self: *volatile Self) void {
+            self.dropped +%= 1;
         }
 
         /// Read and remove entry from the ring. Caller MUST check hasData() first.
@@ -148,6 +202,21 @@ pub fn SpscRing(comptime Entry: type, comptime capacity: u32) type {
         pub fn commitProduce(self: *volatile Self) void {
             barriers.dataMemoryBarrierInner();
             self.head = (self.head + 1) & mask;
+        }
+
+        comptime {
+            if (@offsetOf(Self, "head") != 0)
+                @compileError("SpscRing.head must be at offset 0");
+            if (@offsetOf(Self, "dropped") != 4)
+                @compileError("SpscRing.dropped must be at offset 4");
+            if (@offsetOf(Self, "tail") != CACHE_LINE)
+                @compileError("SpscRing.tail must be at offset 64 (cache-line split)");
+            // entries offset is `2 * CACHE_LINE` rounded up to @alignOf(Entry);
+            // for any Entry with alignment <= 64, this is exactly 128.
+            if (@alignOf(Entry) <= CACHE_LINE) {
+                if (@offsetOf(Self, "entries") != 2 * CACHE_LINE)
+                    @compileError("SpscRing.entries must be at offset 128");
+            }
         }
     };
 }
@@ -211,6 +280,9 @@ pub fn BufferPool(comptime buf_size: u32, comptime count: u32) type {
 //
 // Power-of-2 capacity with one byte sacrificed (usable = capacity - 1).
 // Handles wrap-around transparently in two-segment copies.
+//
+// Layout matches SpscRing (M0.5, version 2): producer cache line at 0,
+// consumer cache line at 64, payload at 128.
 //------------------------------------------------------------------------------
 
 pub fn ByteRing(comptime capacity: u32) type {
@@ -224,34 +296,58 @@ pub fn ByteRing(comptime capacity: u32) type {
     return extern struct {
         const Self = @This();
 
-        head: u32 align(8),
+        // Producer cache line (offset 0..63).
+        head: u32,
+        /// See SpscRing.dropped.
+        dropped: u32,
+        _pad_producer: [CACHE_LINE - 8]u8,
+
+        // Consumer cache line (offset 64..127).
         tail: u32,
-        _pad: [8]u8,
+        _pad_consumer: [CACHE_LINE - 4]u8,
+
+        // Payload (offset 128).
         data: [capacity]u8,
 
         pub fn init(self: *volatile Self) void {
             self.head = 0;
+            self.dropped = 0;
+            self._pad_producer = [_]u8{0} ** (CACHE_LINE - 8);
             self.tail = 0;
-            self._pad = [_]u8{0} ** 8;
+            self._pad_consumer = [_]u8{0} ** (CACHE_LINE - 4);
         }
 
+        /// Consumer-side bytes-available. Load-acquire on `head` -- see
+        /// SpscRing.hasData. Subsequent `read()` is safe.
         pub fn availableBytes(self: *volatile Self) u32 {
-            return (self.head -% self.tail) & mask;
+            const h = self.head;
+            barriers.dataMemoryBarrierInnerLoad();
+            return (h -% self.tail) & mask;
         }
 
         pub fn freeBytes(self: *volatile Self) u32 {
-            return capacity - 1 - self.availableBytes();
+            return capacity - 1 - ((self.head -% self.tail) & mask);
         }
 
         pub fn isEmpty(self: *volatile Self) bool {
-            return self.head == self.tail;
+            const h = self.head;
+            barriers.dataMemoryBarrierInnerLoad();
+            return h == self.tail;
         }
 
         pub fn isFull(self: *volatile Self) bool {
             return ((self.head + 1) & mask) == self.tail;
         }
 
+        /// Bump the drop counter. Caller bumps once per byte-batch dropped
+        /// (a single `write()` returning short counts as one drop event).
+        pub fn addDrop(self: *volatile Self) void {
+            self.dropped +%= 1;
+        }
+
         /// Write bytes to the ring. Returns number of bytes actually written.
+        /// Callers that treat a short write as a drop should call `addDrop()`
+        /// when the return value is less than `src.len`.
         pub fn write(self: *volatile Self, src: []const u8) u32 {
             const free = self.freeBytes();
             const to_write: u32 = @min(@as(u32, @intCast(src.len)), free);
@@ -306,6 +402,17 @@ pub fn ByteRing(comptime capacity: u32) type {
             barriers.dataMemoryBarrierInner();
             self.tail = (self.tail + to_skip) & mask;
             return to_skip;
+        }
+
+        comptime {
+            if (@offsetOf(Self, "head") != 0)
+                @compileError("ByteRing.head must be at offset 0");
+            if (@offsetOf(Self, "dropped") != 4)
+                @compileError("ByteRing.dropped must be at offset 4");
+            if (@offsetOf(Self, "tail") != CACHE_LINE)
+                @compileError("ByteRing.tail must be at offset 64 (cache-line split)");
+            if (@offsetOf(Self, "data") != 2 * CACHE_LINE)
+                @compileError("ByteRing.data must be at offset 128");
         }
     };
 }

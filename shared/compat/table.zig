@@ -106,8 +106,8 @@ pub const table = [_]CompatEntry{
         .compatible = "arm,gic-v3",
         .class = .interrupt_controller,
         .handler = .kernel,
-        .status = .planned,
-        .notes = "GICv3 (planned for Minisforum MS-R1 / CIX CP8180)",
+        .status = .supported,
+        .notes = "GICv3 (Minisforum MS-R1 / CIX CP8180; QEMU virt KVM)",
     },
 
     // =========================================================================

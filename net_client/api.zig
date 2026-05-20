@@ -132,11 +132,16 @@ pub fn getNetworkManager() u16 {
 // Internal Helpers
 //------------------------------------------------------------------------------
 
-fn sendAndRecv(msg: *sys.Message, timeout_ns: u64) SocketError!void {
+/// Send a request to the network stack and wait for the matching typed reply.
+/// Uses `sys.icc_recv_typed` so stale messages of other types (late
+/// CLOSE_RESULT from a prior op, etc.) stay in the mailbox rather than
+/// getting consumed as our response. Caller passes the expected reply
+/// `MsgType`; on success `msg.msg_type` is guaranteed to equal it.
+fn sendAndRecv(msg: *sys.Message, expected_reply: u16, timeout_ns: u64) SocketError!void {
     const send_result = sys.icc_send(network_manager_id, msg);
     if (send_result >= 0xFFFF_FFFF_0000_0000) return SocketError.IccError;
 
-    const recv_result = sys.icc_recv(msg, timeout_ns);
+    const recv_result = sys.icc_recv_typed(msg, expected_reply, timeout_ns);
     if (recv_result >= 0xFFFF_FFFF_0000_0000) return SocketError.TimedOut;
 }
 
@@ -145,22 +150,26 @@ fn sendAndRecv(msg: *sys.Message, timeout_ns: u64) SocketError!void {
 //------------------------------------------------------------------------------
 
 /// Owns a connected socket: the stack-side socket id, the peer container
-/// id (for ICC), and the optional per-socket SHM region. When `region` is
-/// non-null, `read` and `write` use the T1 ring fast path; otherwise they
-/// fall back to T2 ICC RPC.
+/// id (for ICC), and the two per-socket SHM regions (recv + send, post-C8.17
+/// split). When both regions are non-null, `read` and `write` use the T1
+/// ring fast path; otherwise they fall back to T2 ICC RPC.
 pub const SocketStream = struct {
     socket: Socket,
     peer_id: u16,
-    region: ?*volatile socket_shm.SocketShmRegion = null,
-    handle: u64 = 0, // map_create handle for the region (0 if no SHM)
+
+    recv_region: ?*volatile socket_shm.RecvShmRegion = null,
+    recv_token: u32 = 0, // per-attach token from map_attach; 0 if no SHM
+
+    send_region: ?*volatile socket_shm.SendShmRegion = null,
+    send_token: u32 = 0,
 
     /// Read up to `buf.len` bytes. Returns when >= 1 byte is available or
     /// the deadline elapses. `timeout_ms == 0` means non-blocking.
     pub fn read(self: SocketStream, buf: []u8, timeout_ms: u32) SocketError!usize {
         if (buf.len == 0) return 0;
 
-        if (self.region) |region| {
-            const stream = ReadStream.fromRegion(region);
+        if (self.recv_region) |region| {
+            const stream = ReadStream.fromRegion(region, self.recv_token);
             if (timeout_ms == 0) {
                 const n = stream.readNonBlocking(buf);
                 return if (n == 0) SocketError.WouldBlock else n;
@@ -181,8 +190,8 @@ pub const SocketStream = struct {
     pub fn write(self: SocketStream, buf: []const u8, timeout_ms: u32) SocketError!usize {
         if (buf.len == 0) return 0;
 
-        if (self.region) |region| {
-            const stream = WriteStream.from(region, self.peer_id, self.socket);
+        if (self.send_region) |region| {
+            const stream = WriteStream.from(region, self.send_token, self.peer_id, self.socket);
             if (timeout_ms == 0) {
                 const n = stream.writeNonBlocking(buf);
                 return if (n == 0) SocketError.WouldBlock else n;
@@ -197,10 +206,11 @@ pub const SocketStream = struct {
         return self.sendIcc(buf, timeout_ms);
     }
 
-    /// Close the socket. Detaches the SHM region (if mapped) and waits for
+    /// Close the socket. Detaches both SHM regions (if mapped) and waits for
     /// the stack's CLOSE ACK to keep the ICC mailbox clean.
     pub fn close(self: SocketStream) void {
-        if (self.handle != 0) _ = sys.map_detach(self.handle);
+        if (self.recv_token != 0) _ = sys.map_detach(self.recv_token);
+        if (self.send_token != 0) _ = sys.map_detach(self.send_token);
 
         var msg: sys.Message = undefined;
         msg.msg_type = MsgType.CLOSE;
@@ -208,22 +218,24 @@ pub const SocketStream = struct {
         (CloseRequest{ .socket = self.socket }).serialize(&msg.payload);
 
         _ = sys.icc_send(self.peer_id, &msg);
-        // Wait for ACK so the next op doesn't see a stale CLOSE_RESULT.
-        _ = sys.icc_recv(&msg, 2_000_000_000);
+        // Drain CLOSE_RESULT specifically; using icc_recv_typed keeps any
+        // unrelated late traffic in the mailbox for the caller's next op
+        // rather than silently consuming and discarding it here.
+        _ = sys.icc_recv_typed(&msg, MsgType.CLOSE_RESULT, 2_000_000_000);
     }
 
     /// Borrow a T1-only `ReadStream` for callers that need to compose
     /// strictly within T1 (e.g. a streaming parser classified T1). Returns
-    /// null if no SHM is mapped.
+    /// null if no recv-side SHM is mapped.
     pub fn readStream(self: SocketStream) ?ReadStream {
-        const region = self.region orelse return null;
-        return ReadStream.fromRegion(region);
+        const region = self.recv_region orelse return null;
+        return ReadStream.fromRegion(region, self.recv_token);
     }
 
-    /// Borrow a T1-only `WriteStream`. Returns null if no SHM is mapped.
+    /// Borrow a T1-only `WriteStream`. Returns null if no send-side SHM is mapped.
     pub fn writeStream(self: SocketStream) ?WriteStream {
-        const region = self.region orelse return null;
-        return WriteStream.from(region, self.peer_id, self.socket);
+        const region = self.send_region orelse return null;
+        return WriteStream.from(region, self.send_token, self.peer_id, self.socket);
     }
 
     fn recvIcc(self: SocketStream, buf: []u8, timeout_ms: u32) SocketError!usize {
@@ -241,9 +253,7 @@ pub const SocketStream = struct {
         else
             toNanoseconds(timeout_ms) + 1_000_000_000; // +1s overhead
 
-        try sendAndRecv(&msg, ipc_timeout);
-
-        if (msg.msg_type != MsgType.RECV_RESULT) return SocketError.IccError;
+        try sendAndRecv(&msg, MsgType.RECV_RESULT, ipc_timeout);
 
         const parsed = RecvResult.deserialize(&msg.payload);
         if (parsed.header.error_code != ErrorCode.SUCCESS) {
@@ -264,9 +274,7 @@ pub const SocketStream = struct {
             .len = @intCast(@min(data.len, protocol.MAX_SEND_DATA)),
         }).serialize(&msg.payload, data);
 
-        try sendAndRecv(&msg, toNanoseconds(timeout_ms));
-
-        if (msg.msg_type != MsgType.SEND_RESULT) return SocketError.IccError;
+        try sendAndRecv(&msg, MsgType.SEND_RESULT, toNanoseconds(timeout_ms));
 
         const result = SendResult.deserialize(&msg.payload);
         if (result.error_code != ErrorCode.SUCCESS) {
@@ -290,9 +298,7 @@ pub fn connect(ip: Ipv4, port: u16, proto: Protocol, timeout_ms: u32) SocketErro
     msg.flags = 0;
     (ConnectRequest{ .ip = ip, .port = port, .protocol = proto }).serialize(&msg.payload);
 
-    try sendAndRecv(&msg, toNanoseconds(timeout_ms));
-
-    if (msg.msg_type != MsgType.CONNECT_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.CONNECT_RESULT, toNanoseconds(timeout_ms));
 
     const result = ConnectResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {
@@ -304,37 +310,41 @@ pub fn connect(ip: Ipv4, port: u16, proto: Protocol, timeout_ms: u32) SocketErro
         .peer_id = network_manager_id,
     };
 
-    // The stack sends SOCKET_SHM_OFFER immediately after CONNECT_RESULT.
-    // 5ms window is enough on every stack we run on QEMU/MS-R1; missing it
-    // is fine -- read/write transparently fall back to ICC.
-    const offer_result = sys.icc_recv(&msg, 5_000_000);
-    if (!errors.isError(offer_result) and msg.msg_type == MsgType.SOCKET_SHM_OFFER) {
-        const offer = protocol.ShmOfferPayload.deserialize(&msg.payload);
-        if (offer.socket_id == result.socket) {
-            attachShm(&stream, offer.handle);
-        } else {
-            // Stray offer for a different socket (concurrent connect raced
-            // into our mailbox). We can't keep someone else's region, so
-            // drop the kernel-side reference rather than leak the handle.
-            _ = sys.map_detach(offer.handle);
-        }
+    // SHM handles travel inside CONNECT_RESULT (no separate offer message,
+    // no race). Either handle being 0 means no SHM on that direction (UDP,
+    // or stack chose not to offer); read/write fall back to ICC. In practice
+    // the stack offers both or neither. attachShm() failure leaves `stream`
+    // in ICC-fallback mode unchanged.
+    if (result.recv_shm_handle != 0 and result.send_shm_handle != 0) {
+        attachShm(&stream, result.recv_shm_handle, result.send_shm_handle) catch {};
     }
 
     return stream;
 }
 
-fn attachShm(stream: *SocketStream, handle: u64) void {
-    const result = sys.map_attach(handle, 1);
-    if (errors.isError(result)) return;
+const AttachShmError = error{ MapAttachFailed, ValidateFailed };
 
-    const region: *volatile socket_shm.SocketShmRegion = @ptrFromInt(result);
-    if (!region.validate()) {
-        _ = sys.map_detach(handle);
-        return;
-    }
+fn attachShm(stream: *SocketStream, recv_handle: u64, send_handle: u64) AttachShmError!void {
+    const recv_result = sys.map_attach(recv_handle, 1);
+    if (errors.isError(recv_result)) return AttachShmError.MapAttachFailed;
+    const recv_token = sys.MapResult.token(recv_result);
+    errdefer _ = sys.map_detach(recv_token);
 
-    stream.region = region;
-    stream.handle = handle;
+    const recv_region: *volatile socket_shm.RecvShmRegion = @ptrFromInt(sys.MapResult.va(recv_result));
+    if (!recv_region.validate()) return AttachShmError.ValidateFailed;
+
+    const send_result = sys.map_attach(send_handle, 1);
+    if (errors.isError(send_result)) return AttachShmError.MapAttachFailed;
+    const send_token = sys.MapResult.token(send_result);
+    errdefer _ = sys.map_detach(send_token);
+
+    const send_region: *volatile socket_shm.SendShmRegion = @ptrFromInt(sys.MapResult.va(send_result));
+    if (!send_region.validate()) return AttachShmError.ValidateFailed;
+
+    stream.recv_region = recv_region;
+    stream.recv_token = recv_token;
+    stream.send_region = send_region;
+    stream.send_token = send_token;
 
     // Acknowledge so the stack flips its slot to "active" and starts draining.
     var msg: sys.Message = undefined;
@@ -361,9 +371,7 @@ pub fn resolve(hostname: []const u8, timeout_ms: u32) SocketError!Ipv4 {
     msg.flags = 0;
     (DnsRequest{ .hostname_len = @intCast(hostname.len) }).serialize(&msg.payload, hostname);
 
-    try sendAndRecv(&msg, toNanoseconds(timeout_ms));
-
-    if (msg.msg_type != MsgType.DNS_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.DNS_RESULT, toNanoseconds(timeout_ms));
 
     const result = DnsResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) return SocketError.DnsError;
@@ -395,9 +403,7 @@ pub fn ping(ip: Ipv4, seq: u16, timeout_ms: u32) SocketError!PingResponse {
     else
         toNanoseconds(timeout_ms) + 2_000_000_000;
 
-    try sendAndRecv(&msg, ipc_timeout);
-
-    if (msg.msg_type != MsgType.PING_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.PING_RESULT, ipc_timeout);
 
     const result = PingResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {
@@ -425,9 +431,7 @@ pub fn pingGateway(seq: u16, timeout_ms: u32) SocketError!PingResponse {
     else
         toNanoseconds(timeout_ms) + 2_000_000_000;
 
-    try sendAndRecv(&msg, ipc_timeout);
-
-    if (msg.msg_type != MsgType.PING_GATEWAY_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.PING_GATEWAY_RESULT, ipc_timeout);
 
     const result = PingResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {
@@ -450,9 +454,7 @@ pub fn testDns(timeout_ms: u32) SocketError!TestDnsResult {
     else
         toNanoseconds(timeout_ms) + 2_000_000_000;
 
-    try sendAndRecv(&msg, ipc_timeout);
-
-    if (msg.msg_type != MsgType.TEST_DNS_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.TEST_DNS_RESULT, ipc_timeout);
 
     const result = TestDnsResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {
@@ -468,9 +470,7 @@ pub fn getConfig(timeout_ms: u32) SocketError!ConfigResult {
     msg.flags = 0;
     (GetConfigRequest{}).serialize(&msg.payload);
 
-    try sendAndRecv(&msg, toNanoseconds(timeout_ms));
-
-    if (msg.msg_type != MsgType.CONFIG_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.CONFIG_RESULT, toNanoseconds(timeout_ms));
 
     const result = ConfigResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {
@@ -493,9 +493,7 @@ pub fn testConnectivity(timeout_ms: u32) SocketError!TestConnectivityResult {
     else
         toNanoseconds(timeout_ms) + 2_000_000_000;
 
-    try sendAndRecv(&msg, ipc_timeout);
-
-    if (msg.msg_type != MsgType.TEST_CONNECTIVITY_RESULT) return SocketError.IccError;
+    try sendAndRecv(&msg, MsgType.TEST_CONNECTIVITY_RESULT, ipc_timeout);
 
     const result = TestConnectivityResult.deserialize(&msg.payload);
     if (result.error_code != ErrorCode.SUCCESS) {

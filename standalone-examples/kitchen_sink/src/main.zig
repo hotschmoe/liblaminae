@@ -8,7 +8,7 @@
 const lib = @import("liblaminae");
 const sys = lib.syscalls;
 const barriers = lib.barriers;
-const va = lib.va_layout;
+const uva = lib.uva_layout;
 
 // ─── Tiny Output (no std, no fmt) ───────────────────────────────────────────
 
@@ -79,11 +79,11 @@ fn ok(label: []const u8) void {
 const RingHdr = extern struct { write_idx: u32, read_idx: u32, sequence: u32, flags: u32, overflow_count: u32, _p: [44]u8 };
 
 fn ringHdr() *volatile RingHdr {
-    return @ptrFromInt(va.CONSOLE_RING_VA);
+    return @ptrFromInt(uva.console_ring.base);
 }
 
 fn ringWrite(msg: []const u8) void {
-    const ring: [*]volatile u8 = @ptrFromInt(va.CONSOLE_RING_VA + 64);
+    const ring: [*]volatile u8 = @ptrFromInt(uva.console_ring.base + 64);
     const h = ringHdr();
     const cap: u32 = 64 * 1024 - 64;
     for (msg) |b| {
@@ -129,11 +129,11 @@ export fn _start() noreturn {
     wn(rh.overflow_count);
     w("\n");
     w("  VA: con=");
-    wh(va.CONSOLE_RING_VA);
+    wh(uva.console_ring.base);
     w(" heap=");
-    wh(va.HEAP_VA_BASE);
+    wh(uva.heap.base);
     w(" dev=");
-    wh(va.DEVICE_VA_BASE);
+    wh(uva.device.base);
     w("\n");
 
     // ── 3. Timing ─────────────────────────────────────
@@ -222,11 +222,14 @@ export fn _start() noreturn {
     const sh = sys.map_create(1, 0);
     if (!lib.isError(sh)) {
         ok("map_create");
-        const handle = sys.MapResult.handle(sh);
+        const create_token = sys.MapResult.token(sh);
         const create_va = sys.MapResult.va(sh);
+        // Retrieve cross-container handle to pass to map_attach (same container here, for test).
+        const handle = sys.map_handle(create_token);
         const sv = sys.map_attach(handle, 0x3);
         if (!lib.isError(sv)) {
             ok("map_attach(RW)");
+            const attach_token = sys.MapResult.token(sv);
             // Write via create mapping, verify via attach mapping (same phys pages)
             const pw: [*]volatile u8 = @ptrFromInt(create_va);
             pw[0] = 0xCA;
@@ -234,12 +237,15 @@ export fn _start() noreturn {
             pw[2] = 0xBA;
             pw[3] = 0xBE;
             barriers.dataMemoryBarrier();
-            const pr: [*]volatile u8 = @ptrFromInt(sv);
+            const attach_va = sys.MapResult.va(sv);
+            const pr: [*]volatile u8 = @ptrFromInt(attach_va);
             if (pr[0] == 0xCA and pr[1] == 0xFE) ok("SHM verify 0xCAFE");
-            res("detach", sys.map_detach(handle));
+            res("detach", sys.map_detach(attach_token));
         } else {
             res("attach", sv);
         }
+        // Detach the owner mapping (create_token) to release the last ref.
+        _ = sys.map_detach(create_token);
     } else {
         res("map_create", sh);
     }
@@ -380,11 +386,13 @@ export fn _start() noreturn {
     const wk = sys.wait_event(0, 0, 0, 1_000_000);
     const we = sys.get_time() - ws;
     w("  reason=");
-    switch (sys.WakeReason.fromU64(wk)) {
+    switch (wk) {
         .timeout => w("TIMEOUT"),
         .irq => w("IRQ"),
         .icc => w("ICC"),
         .peer_crashed => w("CRASH"),
+        .ring => w("RING"),
+        .closed => w("CLOSED"),
         .@"error" => w("ERR"),
     }
     w(" ");

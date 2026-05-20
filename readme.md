@@ -87,8 +87,10 @@ is not critical.
 
 Some syscalls pack two values into a single u64 return:
 
-- `map_create` returns `(handle << 32) | (va & 0xFFFFFFFF)`.
-  Use `sys.MapResult.handle(result)` and `sys.MapResult.va(result)` to unpack.
+- `map_create` and `map_attach` return `(token << 32) | (va & 0xFFFFFFFF)`.
+  Use `sys.MapResult.token(result)` (u32) and `sys.MapResult.va(result)` to unpack.
+  The token is per-attach and is passed to `map_detach`. To get the cross-container
+  handle for ICC sharing, call `sys.map_handle(token)` after `map_create`.
 
 - `alloc_dma` returns `(bus_addr << 32) | (va & 0xFFFFFFFF)`.
   Use `sys.DmaResult.busAddr(result)` and `sys.DmaResult.va(result)` to unpack.
@@ -115,6 +117,9 @@ if (lib.isError(result)) {
     const name = lib.errors.name(result); // e.g. "Map.InvalidHandle"
     // handle error
 }
+const token = sys.MapResult.token(result); // u32, per-attach
+const va    = sys.MapResult.va(result);    // u64, virtual address
+const handle = sys.map_handle(token);      // u64, cross-container identity for ICC sharing
 ```
 
 ## Regenerating

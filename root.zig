@@ -7,7 +7,8 @@
 // Usage:
 //   const lib = @import("liblaminae");
 //   lib.syscalls.write(1, buf, len);
-//   lib.va_layout.HEAP_VA_BASE;
+//   lib.uva_layout.heap.base;   // user (TTBR0) VA constants
+//   lib.va_layout.PAGE_SIZE;    // shared types + PAGE_SIZE
 //------------------------------------------------------------------------------
 
 // T1 vocabulary modules (lib/man/) — pure, peer-free, T0 syscalls only
@@ -22,6 +23,7 @@ pub const net_protocol = @import("man/net_protocol.zig");
 pub const rpc = @import("man/rpc.zig");
 pub const http = @import("man/http.zig");
 pub const socket_stream = @import("man/socket_stream.zig");
+pub const ring = @import("man/ring.zig");
 
 // T2 RPC client modules — thin clients of named peer containers
 pub const init_client = @import("init_client/api.zig");
@@ -42,6 +44,7 @@ pub const errors = @import("gen/errors.zig");
 // Shared modules (lib/shared/) - synced from src/shared/
 pub const shm = @import("shared/shm.zig");
 pub const va_layout = @import("shared/va_layout.zig");
+pub const uva_layout = @import("shared/uva_layout.zig");
 pub const barriers = @import("shared/arch/barriers_el0.zig");
 pub const idle = @import("shared/arch/idle_el0.zig");
 pub const container_info = @import("shared/arch/container_info.zig");

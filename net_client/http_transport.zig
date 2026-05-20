@@ -20,6 +20,7 @@
 
 const net = @import("api.zig");
 const http = @import("../man/http.zig");
+const sys = @import("../gen/syscalls.zig");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
 /// Built on net_api -- inherits T2 transitively (peer-dependent on
@@ -78,15 +79,6 @@ pub const ClientOptions = struct {
     /// Receive timeout in ms (0 = infinite)
     recv_timeout_ms: u32 = 30_000,
 
-    /// Maximum response size
-    max_response_size: usize = 64 * 1024,
-
-    /// Follow redirects (not yet implemented)
-    follow_redirects: bool = false,
-
-    /// Max redirects to follow
-    max_redirects: u8 = 5,
-
     /// Called periodically during recv with bytes received so far
     progress_fn: ?ProgressFn = null,
 };
@@ -94,6 +86,10 @@ pub const ClientOptions = struct {
 pub const Client = struct {
     options: ClientOptions,
     last_connect_error: ?net.SocketError = null,
+    /// Bytes accumulated into the recv buffer on the most recent request.
+    /// Set on every request -- including the failure paths -- so callers
+    /// that hit ReceiveFailed / ResponseParseFailed can dump what they got.
+    last_response_bytes: usize = 0,
 
     pub fn init() Client {
         return .{ .options = .{} };
@@ -184,21 +180,31 @@ pub const Client = struct {
             request_sent += n;
         }
 
-        // Receive response
-        var total_received: usize = 0;
-        var attempts: u32 = 0;
-        const max_attempts: u32 = 500;
+        // READ_SLICE_MS caps one stream.read so ReadStream's internal
+        // WAKE_SLICE_NS (50ms) poll cadence gets ~10 wakes per attempt;
+        // the outer deadline is the real budget.
+        const recv_deadline = sys.get_time() +% (@as(u64, self.options.recv_timeout_ms) * 1_000_000);
+        const READ_SLICE_MS: u32 = 500;
 
-        while (attempts < max_attempts and total_received < recv_buf.len) : (attempts += 1) {
+        var total_received: usize = 0;
+        while (total_received < recv_buf.len) {
+            const now = sys.get_time();
+            if (now >= recv_deadline) break;
+
+            const remaining_ms: u32 = @intCast(@min(
+                @as(u64, READ_SLICE_MS),
+                (recv_deadline - now) / 1_000_000,
+            ));
+
             const received = stream.read(
                 recv_buf[total_received..],
-                100,
+                @max(remaining_ms, 1),
             ) catch |err| {
-                if (err == net.SocketError.WouldBlock) {
-                    continue;
-                }
-                // ConnectionReset with data received = server closed connection
-                if (err == net.SocketError.ConnectionReset and total_received > 0) {
+                // FIN (EndOfStream) or RST (ConnectionReset) with bytes
+                // already buffered is a normal HTTP/1.0 end-of-response.
+                if (total_received > 0 and
+                    (err == net.SocketError.ConnectionReset or err == net.SocketError.EndOfStream))
+                {
                     break;
                 }
                 stream.close();
@@ -234,6 +240,7 @@ pub const Client = struct {
         }
 
         stream.close();
+        self.last_response_bytes = total_received;
 
         if (total_received == 0) {
             return ClientError.ReceiveFailed;

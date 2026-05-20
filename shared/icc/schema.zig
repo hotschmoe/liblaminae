@@ -57,11 +57,10 @@ pub const ranges = [_]MessageRange{
         .name = "Shared network buffers (SHM)",
         .start = 0x1010,
         .end = 0x1013,
-        .desc = "Handshake and queue notifications for shared RX/TX buffers.",
+        .desc = "Handshake notifications for shared RX/TX buffers. Wake plane for RX moved to ring-event (sys_ring_wake) in M2b; SHM_RX_READY retired.",
         .messages = &.{
             .{ .id = 0x1010, .name = "SHM_HANDLE", .direction = "net.driver -> net.stack", .desc = "Shared memory handle for ring" },
             .{ .id = 0x1011, .name = "SHM_ATTACHED", .direction = "net.stack -> net.driver", .desc = "Stack attached to shared memory" },
-            .{ .id = 0x1012, .name = "SHM_RX_READY", .direction = "net.driver -> net.stack", .desc = "New RX packets available" },
             .{ .id = 0x1013, .name = "SHM_TX_READY", .direction = "net.stack -> net.driver", .desc = "New TX packets available" },
         },
     },

@@ -1,96 +1,196 @@
 //------------------------------------------------------------------------------
-// User Virtual Address Layout Constants
+// Virtual Address Layout -- TYPES ONLY
 //------------------------------------------------------------------------------
-// This file is the SINGLE SOURCE OF TRUTH for user VA regions (TTBR0).
-// Both kernel and user-space import these constants.
+// This file holds the vocabulary for ARM64 virtual-address typing. The
+// per-space constants live in:
 //
-// SOURCE OF TRUTH: This file is copied to lib/shared/ by gen-lib.
-// Do not edit lib/shared/va_layout.zig directly.
+//   src/shared/uva_layout.zig         -- TTBR0 (user)   constants
+//   src/kernel/memory/kva_layout.zig  -- TTBR1 (kernel) constants
 //
-// User VA Layout (TTBR0):
-//   0x00010000 - 0x0FFFFFFF: Code/data segments (ELF load)
-//   0x10000000 - 0x1000FFFF: Console ring (64KB, zero-syscall output)
-//   0x10010000 - 0x1FFFFFFF: Shared memory regions (ICC buffers)
-//   0x20000000 - 0x2FFFFFFF: Device MMIO mappings (drivers)
-//   0x30000000 - 0x3FFFFFFF: Heap (256MB max, grows via sys_brk)
-//   0x40000000 - 0x4FFFFFFF: DMA buffers (256MB, driver containers)
-//   0x50000000 - 0x6FFFFFFF: mmap region (512MB, anonymous mappings)
-//   0x7FFFFF000000:          Stack (grows down)
+// Phantom-typing by `AddressSpace` makes `VirtAddr(.user)` and
+// `VirtAddr(.kernel)` distinct compile-time types backed by the same
+// `enum(u64)`. Mixing them at `VaRange.contains` or `BumpAllocator.alloc`
+// boundaries is a type error, not a runtime panic.
 //
-// NOTE: Heap is dynamic (grows/shrinks via sys_brk) but has a HARD CAP
-// at HEAP_VA_MAX (0x40000000). The kernel refuses sys_brk requests that
-// would exceed this, preventing overlap with DMA region.
+// SOURCE OF TRUTH: This file is copied verbatim to lib/shared/va_layout.zig
+// by `tools/gen_lib.zig` on every `zig build`. Do not hand-edit the lib copy.
 //
-// Future: These constants may be replaced by a kernel-provided
-// Container Info Block. See docs/roadmap/later/container_info_block.md
-//
-// Related: src/kernel/memory/layout.zig has kernel-space (TTBR1) layout
-// and allocation parameters (initial heap size, stack sizes, etc.)
 //------------------------------------------------------------------------------
 
-/// Console ring buffer virtual address.
-/// Kernel maps a per-container ring buffer here. User-space writes directly.
-/// This enables zero-syscall console output (Level 2 TTY).
-pub const CONSOLE_RING_VA: u64 = 0x10000000;
+const std = @import("std");
 
-/// Console ring buffer size (64KB per container).
-/// Header is 64 bytes, data region is capacity - 64 bytes.
-pub const CONSOLE_RING_SIZE: u64 = 64 * 1024;
-
-/// Number of pages for console ring.
-pub const CONSOLE_RING_PAGES: u64 = CONSOLE_RING_SIZE / PAGE_SIZE;
-
-/// Shared memory region base (starts after console ring).
-/// Used for ICC shared buffers between containers.
-pub const SHARED_VA_BASE: u64 = CONSOLE_RING_VA + CONSOLE_RING_SIZE; // 0x10010000
-
-/// Shared memory region size (256MB - 64KB).
-pub const SHARED_VA_SIZE: u64 = 0x10000000 - CONSOLE_RING_SIZE;
-
-/// Device MMIO mapping base (for driver containers).
-/// Drivers use sys_map_io to map device registers into this region.
-pub const DEVICE_VA_BASE: u64 = 0x20000000;
-
-/// Device MMIO region size (256MB).
-pub const DEVICE_VA_SIZE: u64 = 0x10000000;
-
-/// Heap region base (per-container dynamic allocation).
-/// Containers call sys_brk to grow/shrink within this region.
-/// User-space discovers heap_start via sys_brk(0), not this constant.
-pub const HEAP_VA_BASE: u64 = 0x30000000;
-
-/// Heap region maximum (hard limit enforced by kernel).
-/// sys_brk requests exceeding this are refused.
-pub const HEAP_VA_MAX: u64 = 0x40000000;
-
-/// Maximum heap size per container (256MB).
-pub const HEAP_VA_SIZE: u64 = HEAP_VA_MAX - HEAP_VA_BASE;
-
-/// DMA buffer mapping base (for driver containers).
-/// Drivers use sys_alloc_dma to allocate DMA-coherent memory here.
-/// Starts at HEAP_VA_MAX to avoid overlap with heap.
-pub const DMA_VA_BASE: u64 = 0x40000000;
-
-/// DMA buffer region size (256MB).
-pub const DMA_VA_SIZE: u64 = 0x10000000;
-
-/// mmap region base (for anonymous mappings via sys_mmap).
-/// Used by Zig's page_allocator and other dynamic mapping needs.
-/// Starts after DMA region to avoid overlap.
-pub const MMAP_VA_BASE: u64 = 0x50000000;
-
-/// mmap region maximum (hard limit).
-/// sys_mmap requests exceeding this are refused.
-pub const MMAP_VA_MAX: u64 = 0x70000000;
-
-/// Maximum mmap region size per container (512MB).
-pub const MMAP_VA_SIZE: u64 = MMAP_VA_MAX - MMAP_VA_BASE;
-
-/// Canonical PAGE_SIZE for AArch64 4KB granule. Other modules re-export
-/// from here. Bumping to 16K also requires updating TCR_EL1 TG0/TG1 in
-/// `src/arch/aarch64/common/mmu.zig`.
+/// Canonical PAGE_SIZE for AArch64 4KB granule. Bumping to 16K also requires
+/// updating TCR_EL1 TG0/TG1 in `src/arch/aarch64/common/mmu.zig`.
 pub const PAGE_SIZE: u64 = 4096;
 
-comptime {
-    if (PAGE_SIZE != 4096) @compileError("PAGE_SIZE must be 4096 for AArch64 4KB granule");
+/// Which translation regime a VA lives in. TTBR0 carries `.user` (low half,
+/// bit47 == 0); TTBR1 carries `.kernel` (high half, bit47 == 1). The enum is
+/// a comptime discriminator -- it never appears in a register or struct
+/// field at runtime.
+pub const AddressSpace = enum { user, kernel };
+
+/// A typed virtual address. `space` is a comptime parameter, so
+/// `VirtAddr(.user)` and `VirtAddr(.kernel)` are distinct types that cannot
+/// be assigned to one another without an explicit conversion at the
+/// uaccess boundary.
+///
+/// Backed by `enum(u64) { _ }` so no field accessors, no struct padding,
+/// and `@intFromEnum` / `@enumFromInt` are the only ways in or out -- the
+/// raw u64 stays explicit at the boundary.
+///
+/// Pointer conversion (`toPtr`/`fromPtr`) is provided so kernel code can
+/// dereference kernel VAs and capture VAs from `&symbol`-style addresses
+/// without an `@intFromEnum`/`@ptrFromInt` dance at every site. The space
+/// tag travels with the value, so `VirtAddr(.kernel).toPtr(*T)` cannot be
+/// accidentally written from a TTBR0 value.
+pub fn VirtAddr(comptime space: AddressSpace) type {
+    return enum(u64) {
+        _,
+        pub const addr_space: AddressSpace = space;
+
+        pub inline fn raw(self: @This()) u64 {
+            return @intFromEnum(self);
+        }
+
+        pub inline fn fromRaw(v: u64) @This() {
+            return @enumFromInt(v);
+        }
+
+        pub inline fn offset(self: @This(), bytes: u64) @This() {
+            return @enumFromInt(@intFromEnum(self) +% bytes);
+        }
+
+        /// Offset with overflow detection. Returns `null` if `raw() + bytes`
+        /// would overflow `u64`. Use when adding caller-supplied byte counts
+        /// where the upper bound isn't statically known.
+        pub inline fn tryOffset(self: @This(), bytes: u64) ?@This() {
+            const sum, const overflow = @addWithOverflow(@intFromEnum(self), bytes);
+            if (overflow != 0) return null;
+            return @enumFromInt(sum);
+        }
+
+        /// Round forward to the next multiple of `alignment` (which must be
+        /// a power of two). Wraps via `std.mem.alignForward`.
+        pub inline fn alignForward(self: @This(), alignment: u64) @This() {
+            return @enumFromInt(std.mem.alignForward(u64, @intFromEnum(self), alignment));
+        }
+
+        pub inline fn isAligned(self: @This(), alignment: u64) bool {
+            return std.mem.isAligned(@intFromEnum(self), alignment);
+        }
+
+        /// AArch64 canonical-form check (48-bit VA, T0SZ/T1SZ=16). Bits
+        /// 63..47 must all match bit 47: either all-zero (TTBR0 / user
+        /// half) or all-one (TTBR1 / kernel half). Non-canonical VAs
+        /// translation-fault on dereference.
+        pub inline fn isCanonical(self: @This()) bool {
+            const upper = @intFromEnum(self) >> 47;
+            return upper == 0 or upper == 0x1FFFF;
+        }
+
+        /// Convert to a pointer. `T` must be a pointer type; a non-pointer
+        /// `T` would otherwise produce a confusing `@ptrFromInt` error deep
+        /// inside a generic monomorphization.
+        pub inline fn toPtr(self: @This(), comptime T: type) T {
+            comptime {
+                if (@typeInfo(T) != .pointer) {
+                    @compileError("VirtAddr.toPtr: T must be a pointer type, got " ++ @typeName(T));
+                }
+            }
+            return @ptrFromInt(@intFromEnum(self));
+        }
+
+        /// Capture a pointer as a typed VA. `ptr` must be a pointer; passing
+        /// a non-pointer (e.g. integer) is almost always an accidental call
+        /// and would produce a confusing `@intFromPtr` error otherwise.
+        pub inline fn fromPtr(ptr: anytype) @This() {
+            comptime {
+                const PtrType = @TypeOf(ptr);
+                if (@typeInfo(PtrType) != .pointer) {
+                    @compileError("VirtAddr.fromPtr: argument must be a pointer, got " ++ @typeName(PtrType));
+                }
+            }
+            return @enumFromInt(@intFromPtr(ptr));
+        }
+    };
+}
+
+/// A contiguous half-open `[base, base+size)` slot in virtual address
+/// space, tagged with the space it lives in. `VaRange(.user)` and
+/// `VaRange(.kernel)` are distinct types: `contains(va)` requires the
+/// matching `VirtAddr(space)`, so passing a TTBR1 VA into a TTBR0 range
+/// (or vice versa) is a compile error.
+///
+/// `base` is itself a typed `VirtAddr(space)` so callers can pass
+/// `uva_layout.heap.base` directly into typed-VA function parameters
+/// without an `UVA.fromRaw(...)` wrap. Use `Range.init(base_raw, size)`
+/// for compact constant declarations.
+pub fn VaRange(comptime space: AddressSpace) type {
+    return struct {
+        base: VA,
+        size: u64,
+
+        pub const addr_space: AddressSpace = space;
+        pub const VA = VirtAddr(space);
+
+        /// Compact constructor for region-table declarations:
+        ///     pub const heap = Range.init(0x30000000, 0x10000000);
+        /// Equivalent to `Range{ .base = VA.fromRaw(b), .size = s }`.
+        pub fn init(base_raw: u64, size_bytes: u64) @This() {
+            return .{ .base = VA.fromRaw(base_raw), .size = size_bytes };
+        }
+
+        pub fn end(s: @This()) VA {
+            return s.base.offset(s.size);
+        }
+
+        pub fn contains(s: @This(), va: VA) bool {
+            const v = va.raw();
+            const base_raw = s.base.raw();
+            return v >= base_raw and v < base_raw + s.size;
+        }
+
+        /// True iff `[va, va+len)` fits entirely inside the range.
+        /// Zero-length spans are accepted iff `va` itself is in-range; the
+        /// overflow check rejects requests where `va + len` wraps.
+        pub fn containsRange(s: @This(), va: VA, len: u64) bool {
+            const v = va.raw();
+            const base_raw = s.base.raw();
+            if (v < base_raw) return false;
+            const tail = v +% len;
+            if (tail < v) return false; // u64 overflow
+            return tail <= base_raw + s.size;
+        }
+
+        pub fn pageCount(s: @This()) u64 {
+            return s.size / PAGE_SIZE;
+        }
+    };
+}
+
+/// Monotonic bump allocator over a comptime-bound `VaRange(space)`. The
+/// space is inferred from the range, so `alloc()` returns the matching
+/// `?VirtAddr(space)` -- handing the result to a function expecting the
+/// wrong space is a compile error.
+///
+/// `range` is `anytype` so callers can pass either `VaRange(.user)` or
+/// `VaRange(.kernel)` values without naming the type at the call site.
+/// `next` defaults to `range.base` so `.{}` yields a ready-to-use
+/// allocator with no init() call. Callers page-align `len` before calling
+/// `alloc`; there is no free.
+pub fn BumpAllocator(comptime range: anytype) type {
+    const Range = @TypeOf(range);
+    const space: AddressSpace = Range.addr_space;
+    const VA = VirtAddr(space);
+
+    return struct {
+        next: u64 = range.base.raw(),
+
+        pub fn alloc(self: *@This(), len: u64) ?VA {
+            const cur = VA.fromRaw(self.next);
+            if (!range.containsRange(cur, len)) return null;
+            self.next += len;
+            return cur;
+        }
+    };
 }

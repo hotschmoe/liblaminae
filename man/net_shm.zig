@@ -97,11 +97,12 @@ pub const SharedNetBuffer = extern struct {
     }
 };
 
-/// IPC message types for shared memory signaling
+/// IPC message types for shared memory signaling.
+/// SHM_RX_READY (0x1012) was retired in M2b -- the RX wake plane is now
+/// `sys_ring_wake` against the rx_ring's per-attach token.
 pub const ShmMsgType = struct {
     pub const SHM_HANDLE: u16 = 0x1010;
     pub const SHM_ATTACHED: u16 = 0x1011;
-    pub const SHM_RX_READY: u16 = 0x1012;
     pub const SHM_TX_READY: u16 = 0x1013;
 };
 

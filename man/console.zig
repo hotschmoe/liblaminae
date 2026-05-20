@@ -3,7 +3,7 @@
 //------------------------------------------------------------------------------
 // Zero-syscall console output for containers.
 //
-// Each container has a 64KB console ring buffer mapped at CONSOLE_RING_VA.
+// Each container has a 64KB console ring buffer mapped at uva_layout.console_ring.base.
 // The kernel reads from this buffer and routes output to UART.
 //
 // Usage:
@@ -20,7 +20,7 @@
 //------------------------------------------------------------------------------
 
 const std = @import("std");
-const va_layout = @import("../shared/va_layout.zig");
+const uva_layout = @import("../shared/uva_layout.zig");
 
 /// Tier-contract classification (tier_contract.md, audited by `lib/_audit.zig`).
 /// Zero-syscall ring drain + `sys.write` fallback. No peer ICC.
@@ -89,9 +89,9 @@ pub const ContainerConsole = ConsoleRing(64 * 1024 - 64);
 //------------------------------------------------------------------------------
 
 /// Get pointer to this container's console ring.
-/// Uses CONSOLE_RING_VA from shared va_layout (single source of truth).
+/// Uses `uva_layout.console_ring.base` -- single source of truth.
 fn getConsole() *ContainerConsole {
-    return @ptrFromInt(va_layout.CONSOLE_RING_VA);
+    return uva_layout.console_ring.base.toPtr(*ContainerConsole);
 }
 
 //------------------------------------------------------------------------------

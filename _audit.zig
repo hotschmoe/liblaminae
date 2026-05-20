@@ -55,6 +55,7 @@ const t1_modules = struct {
     pub const rpc = @import("man/rpc.zig");
     pub const http = @import("man/http.zig");
     pub const socket_stream = @import("man/socket_stream.zig");
+    pub const ring = @import("man/ring.zig");
 };
 
 /// T2 modules: thin RPC clients of peer containers, bounded-timeout ICC.

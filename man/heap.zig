@@ -15,14 +15,15 @@
 //   // use ptr...
 //   // free is a no-op for bump allocator
 //
-// Memory Layout:
-//   heap_start: 0x30000000 (from kernel)
+// Memory Layout (per uva_layout.heap):
+//   heap_start: heap.base (from kernel; 0x30000000 today)
 //   heap_break: grows upward via sys_brk
-//   heap_max:   0x40000000 (256MB limit)
+//   heap_max:   heap.end() (256MB hard cap; 0x40000000 today)
 //------------------------------------------------------------------------------
 
 const syscalls = @import("../gen/syscalls.zig");
 const va_layout = @import("../shared/va_layout.zig");
+const uva_layout = @import("../shared/uva_layout.zig");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
 /// Bump allocator backed by sys_brk only -- no peer ICC.
@@ -39,8 +40,9 @@ const ALIGNMENT: usize = 8;
 
 const PAGE_SIZE: usize = va_layout.PAGE_SIZE;
 
-/// Maximum heap size (256MB)
-const MAX_HEAP_SIZE: usize = 256 * 1024 * 1024;
+/// Maximum heap size, sourced from the shared VA layout so the kernel and the
+/// user-space allocator agree without a second hand-edited constant.
+const MAX_HEAP_SIZE: usize = uva_layout.heap.size;
 
 //------------------------------------------------------------------------------
 // Public API

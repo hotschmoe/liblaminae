@@ -1,39 +1,38 @@
 //------------------------------------------------------------------------------
-// Socket Stream — T1 vocabulary for SHM-backed socket reads and writes
+// Socket Stream -- T1 vocabulary for SHM-backed socket reads and writes
 //------------------------------------------------------------------------------
 //
-// `ReadStream` and `WriteStream` are the two halves of a connected socket's
-// data plane once the network stack has offered a SHM region
-// (`SOCKET_SHM_OFFER` + `SOCKET_SHM_ACCEPT`). Steady state on either side is:
+// `ReadStream` reads from a `RecvShmRegion`; `WriteStream` writes to a
+// `SendShmRegion`. Both park via `sys_ring_arm` + `sys_wait_event` and
+// are woken by zmoltcp's `sys_ring_wake` on the matching waiter slot.
+// Region layout, direction conventions, and the recv-side EOF protocol
+// live in `socket_shm.zig`.
 //
-//   read:  volatile recv_ring read; sys_wait_event for SOCKET_DATA_READY;
-//          drain the ICC notification msg (no peer-blocking RPC); re-read.
-//   write: volatile send_ring write; fire-and-forget icc_send so the stack
-//          drains promptly; sys_wait_event for SOCKET_WRITE_READY when the
-//          ring is full; re-write.
+// Why the SOCKET_SEND_READY / SOCKET_WRITE_READY mailbox wakes still
+// exist (post-C8.17 ring-event symmetry was technically achievable):
+//   * SOCKET_SEND_READY (app -> stack): the alternative is the stack
+//     arming the send region's consumer_waiter every mainLoop iter, but
+//     that loses the very first wake before the stack reaches the arm
+//     site -- a SHM_ACCEPT-to-first-arm race that costs a 50ms poll
+//     timeout on every request's hot path.
+//   * SOCKET_WRITE_READY (stack -> app): superset of the M2c
+//     backpressure-wake -- catches the case where the writer hasn't yet
+//     called sys_ring_arm before the stack drains.
+// M2d will fold both into ring-event once the stack mainLoop handles
+// multi-ring arm timing without the race.
 //
-// None of these steps are peer-dependent in the T2 sense (no
-// `icc_send` + matched `icc_recv`). The fire-and-forget `icc_send` for
-// the wake notification is just that -- fire-and-forget; the rings are
-// the source of truth, the wake just removes the 50ms poll-cadence
-// floor on tail latency.
-//
-// What's deliberately NOT here:
-//   - `close()` -- teardown still needs the ICC handshake (peer must
-//     release the SHM region), so it stays in `lib/net_client/api.zig`.
-//   - The high-level `SocketStream` that mixes SHM and ICC fallback --
-//     that's a T2 type and lives in api.zig where it can reach the RPC
-//     helpers.
-//
+// What's deliberately NOT here: `close()` (T2, needs ICC handshake) and
+// the high-level `SocketStream` (T2 type in `lib/net_client/api.zig`).
 //------------------------------------------------------------------------------
 
 const sys = @import("../gen/syscalls.zig");
 const errors = @import("../gen/errors.zig");
 const socket_shm = @import("socket_shm.zig");
+const protocol = @import("net_stack_protocol");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
 /// Pure SHM read/write primitives: volatile ring access + `sys_wait_event`
-/// + fire-and-forget `icc_send` for wake. No peer-blocking ICC. T1 vocabulary.
+/// + `sys_ring_arm` / `sys_ring_wake`. No peer-blocking ICC. T1 vocabulary.
 pub const tier: u8 = 1;
 
 pub const ReadError = error{
@@ -41,9 +40,9 @@ pub const ReadError = error{
     WouldBlock,
     /// The deadline elapsed without any data arriving.
     TimedOut,
-    /// Network stack peer half-closed (TCP FIN). `recv_ring` is fully
+    /// Network stack peer half-closed (TCP FIN). The recv ring is fully
     /// drained; no more data will arrive. Caller should close; further
-    /// reads keep returning `EndOfStream`. Signalled via `SocketShmRegion.eof`.
+    /// reads keep returning `EndOfStream`. Signalled via `RecvShmRegion.eof`.
     EndOfStream,
 };
 
@@ -56,61 +55,71 @@ pub const WriteError = error{
     Empty,
 };
 
-// MsgType constants used for fire-and-forget wake notifications. Mirrors
-// `lib/shared/icc/net_stack_protocol.zig` MsgType values to avoid pulling
-// in the whole protocol surface here.
-const MSG_SOCKET_DATA_READY: u16 = 0x2062;
-const MSG_SOCKET_SEND_READY: u16 = 0x2064;
-const MSG_SOCKET_WRITE_READY: u16 = 0x2065;
-
 const WAKE_SLICE_NS: u64 = 50_000_000; // 50ms per wait slice
 
-/// Drain at most one head-of-mailbox ICC notification, gated on ownership:
-/// a SOCKET_DATA_READY / SOCKET_WRITE_READY wake addressed to a *different*
-/// socket is left queued for that socket's own reader. Non-socket-wake
-/// messages are swallowed (the historical "consume whatever woke us"
-/// semantics). Prevents the inter-socket drain race in `secondary_followups.md`
-/// item C8.13e.
+/// Drain at most one head-of-mailbox ICC notification.
+///
+/// Disposition is driven by the typed `protocol.SocketWakeMsg` enum and the
+/// exhaustive `protocol.dispositionOf` switch (C8.18 Option C). Behavior:
+///   - `wake_only` + addressed to us  -> swallow (it's our own wake).
+///   - `wake_only` + addressed to peer -> leave queued (C8.13e inter-socket
+///     drain race: the peer's stream is parked on this exact wake).
+///   - Unknown to the wake set -> swallow defensively. This preserves the
+///     original behavior for stale ICC traffic from torn-down sockets;
+///     adding a new wake-class message requires extending `SocketWakeMsg`
+///     so the disposition is explicit, not emergent.
 fn drainOwnWake(my_socket_id: u16) void {
     var msg: sys.Message = undefined;
     if (errors.isError(sys.icc_peek(&msg))) return;
 
-    const is_socket_wake = msg.msg_type == MSG_SOCKET_DATA_READY or
-        msg.msg_type == MSG_SOCKET_WRITE_READY;
-    if (is_socket_wake) {
-        const wake_socket_id: u16 = @as(u16, msg.payload[0]) |
-            (@as(u16, msg.payload[1]) << 8);
-        if (wake_socket_id != my_socket_id) return;
+    const wake = protocol.socketWakeMsgFromU16(msg.msg_type) orelse {
+        _ = sys.icc_recv(&msg, 0);
+        return;
+    };
+
+    switch (protocol.dispositionOf(wake)) {
+        .wake_only => {
+            const wake_socket_id: u16 = @as(u16, msg.payload[0]) |
+                (@as(u16, msg.payload[1]) << 8);
+            if (wake_socket_id != my_socket_id and wake == .write_ready) return;
+            _ = sys.icc_recv(&msg, 0);
+        },
+        .deliver => return,
     }
-    _ = sys.icc_recv(&msg, 0);
 }
 
-/// SHM-backed read half of a socket. Constructed by `lib/net_client/api.zig`
-/// once `SOCKET_SHM_ACCEPT` has been sent and the region is mapped.
+/// SHM-backed read half of a socket. `token` is the recv-region attach
+/// token, passed to `sys.ring_arm` so the kernel can find the region's
+/// consumer waiter slot. token == 0 is only used in unit tests that
+/// construct ReadStream without a real region (ring_arm becomes a no-op).
 ///
-/// Lifetime: the underlying `SocketShmRegion` is owned by the network stack
-/// peer. The `ReadStream` is a value handle; copying it is cheap and safe
-/// as long as the parent socket hasn't been closed.
+/// The underlying region is owned by the network stack peer; `ReadStream`
+/// is a value handle, cheap to copy while the parent socket is open.
 pub const ReadStream = struct {
-    region: *volatile socket_shm.SocketShmRegion,
+    region: *volatile socket_shm.RecvShmRegion,
+    token: u32,
 
-    pub fn fromRegion(region: *volatile socket_shm.SocketShmRegion) ReadStream {
-        return .{ .region = region };
+    pub fn fromRegion(region: *volatile socket_shm.RecvShmRegion, token: u32) ReadStream {
+        return .{ .region = region, .token = token };
     }
 
     /// Drain whatever data is available *right now* without blocking.
     pub fn readNonBlocking(self: ReadStream, buf: []u8) usize {
         if (buf.len == 0) return 0;
-        return self.region.recv_ring.read(buf);
+        return self.region.ring.read(buf);
     }
 
     /// Read up to `buf.len` bytes. Returns as soon as >= 1 byte is available
     /// or the deadline elapses. EOF ordering: data first, then `EndOfStream`
-    /// once `recv_ring` drains -- never both at once.
+    /// once the ring drains -- never both at once.
+    ///
+    /// Wake plane: arms the recv ring consumer waiter via sys_ring_arm before
+    /// parking in sys_wait_event. zmoltcp wakes us with sys_ring_wake when it
+    /// drains TCP rx into the ring.
     pub fn read(self: ReadStream, buf: []u8, timeout_ms: u32) ReadError!usize {
         if (buf.len == 0) return 0;
 
-        const immediate = self.region.recv_ring.read(buf);
+        const immediate = self.region.ring.read(buf);
         if (immediate > 0) return immediate;
 
         if (self.region.eof != 0) return ReadError.EndOfStream;
@@ -122,48 +131,67 @@ pub const ReadStream = struct {
             if (now >= deadline) return ReadError.TimedOut;
 
             const wait_ns = @min(deadline -| now, WAKE_SLICE_NS);
+
+            // Arm the recv ring consumer side (direction=0) before parking.
+            // Only arm when the ring is empty -- if data arrived between the
+            // last read and now, skip the arm and drain immediately.
+            const last_head = self.region.ring.head;
+            if (self.region.ring.isEmpty()) {
+                _ = sys.ring_arm(self.token, @intFromPtr(&self.region.ring), last_head, 0);
+            }
             _ = sys.wait_event(0, 1, 0, wait_ns);
 
+            // Drain a stale SOCKET_WRITE_READY for our own socket sitting
+            // at head-of-mailbox from a prior write; otherwise wait_event
+            // keeps returning .icc spuriously and we never park long
+            // enough to receive a ring_wake.
             drainOwnWake(self.region.socket_id);
 
-            const got = self.region.recv_ring.read(buf);
+            const got = self.region.ring.read(buf);
             if (got > 0) return got;
             if (self.region.eof != 0) return ReadError.EndOfStream;
         }
     }
 };
 
-/// SHM-backed write half of a socket. Construction mirrors `ReadStream` but
-/// also captures the `peer_id` and `socket_id` so the stream can fire wake
-/// notifications without needing the api layer in the loop.
+/// SHM-backed write half of a socket. `peer_id` + `socket_id` are captured
+/// so `notify()` can fire the SOCKET_SEND_READY mailbox wake that beats
+/// the stack's 50ms poll-timeout floor.
 pub const WriteStream = struct {
-    region: *volatile socket_shm.SocketShmRegion,
+    region: *volatile socket_shm.SendShmRegion,
+    token: u32,
     peer_id: u16,
     socket_id: u16,
 
     pub fn from(
-        region: *volatile socket_shm.SocketShmRegion,
+        region: *volatile socket_shm.SendShmRegion,
+        token: u32,
         peer_id: u16,
         socket_id: u16,
     ) WriteStream {
-        return .{ .region = region, .peer_id = peer_id, .socket_id = socket_id };
+        return .{ .region = region, .token = token, .peer_id = peer_id, .socket_id = socket_id };
     }
 
-    /// Push as many bytes as fit into the send ring right now. Wakes the
-    /// stack via fire-and-forget icc_send if any bytes were written.
+    /// Push as many bytes as fit into the send ring right now without parking.
     pub fn writeNonBlocking(self: WriteStream, buf: []const u8) usize {
         if (buf.len == 0) return 0;
-        const written = self.region.send_ring.write(buf);
-        if (written > 0) self.notify();
-        return written;
+        const n = self.region.ring.write(buf);
+        if (n > 0) self.notify();
+        return n;
     }
 
     /// Push up to `buf.len` bytes. Returns as soon as >= 1 byte is queued or
     /// the deadline elapses. Caller loops for "send all" semantics.
+    ///
+    /// Wake plane: when the ring fills, arms the send region producer waiter
+    /// via sys_ring_arm(direction=1) and parks in sys_wait_event. zmoltcp
+    /// wakes us with sys_ring_wake(send_token, 1) on drain (C8.17 M2c
+    /// backpressure). After a successful write, fires SOCKET_SEND_READY
+    /// mailbox so the stack drains promptly (tail-latency optimization).
     pub fn write(self: WriteStream, buf: []const u8, timeout_ms: u32) WriteError!usize {
         if (buf.len == 0) return WriteError.Empty;
 
-        const immediate = self.region.send_ring.write(buf);
+        const immediate = self.region.ring.write(buf);
         if (immediate > 0) {
             self.notify();
             return immediate;
@@ -177,11 +205,22 @@ pub const WriteStream = struct {
             if (now >= deadline) return WriteError.TimedOut;
 
             const wait_ns = @min(deadline -| now, WAKE_SLICE_NS);
+
+            // Arm the send ring producer side (direction=1) before parking.
+            // Only arm when the ring is full -- if space appeared between the
+            // last write and now, skip the arm and retry immediately.
+            const last_tail = self.region.ring.tail;
+            if (self.region.ring.isFull()) {
+                _ = sys.ring_arm(self.token, @intFromPtr(&self.region.ring), last_tail, 1);
+            }
             _ = sys.wait_event(0, 1, 0, wait_ns);
 
+            // Drain stale SOCKET_WRITE_READY messages addressed to us so
+            // they don't cause spurious icc wakes on subsequent wait_event
+            // calls (inter-socket drain race; see C8.13e).
             drainOwnWake(self.socket_id);
 
-            const written = self.region.send_ring.write(buf);
+            const written = self.region.ring.write(buf);
             if (written > 0) {
                 self.notify();
                 return written;
@@ -189,11 +228,12 @@ pub const WriteStream = struct {
         }
     }
 
-    // Fire-and-forget wake. bytes_available is left zero -- the stack drain
-    // path doesn't read it; kept in the protocol for future flow control.
+    // Fire-and-forget eager-drain wake. Stack drains the send ring
+    // synchronously on receipt; replaces the 50ms poll-timeout latency
+    // floor with a kernel-mediated mailbox wake.
     fn notify(self: WriteStream) void {
         var msg: sys.Message = undefined;
-        msg.msg_type = MSG_SOCKET_SEND_READY;
+        msg.msg_type = protocol.MsgType.SOCKET_SEND_READY;
         msg.flags = 0;
         @memset(&msg.payload, 0);
         msg.payload[0] = @truncate(self.socket_id);
