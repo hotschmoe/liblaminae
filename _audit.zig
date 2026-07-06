@@ -49,6 +49,7 @@ const t1_modules = struct {
     pub const tasks = @import("man/tasks.zig");
     pub const fwcfg = @import("man/fwcfg.zig");
     pub const virtio = @import("man/virtio.zig");
+    pub const pcie = @import("man/pcie.zig");
     pub const socket_shm = @import("man/socket_shm.zig");
     pub const net_shm = @import("man/net_shm.zig");
     pub const net_protocol = @import("man/net_protocol.zig");
@@ -56,6 +57,7 @@ const t1_modules = struct {
     pub const http = @import("man/http.zig");
     pub const socket_stream = @import("man/socket_stream.zig");
     pub const ring = @import("man/ring.zig");
+    pub const fbcon = @import("man/fbcon.zig");
 };
 
 /// T2 modules: thin RPC clients of peer containers, bounded-timeout ICC.

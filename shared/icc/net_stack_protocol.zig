@@ -17,6 +17,10 @@
 
 const std = @import("std");
 
+/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// this module is import-free by design; lib/root.zig asserts the mirror.
+pub const PAYLOAD_SIZE = 248;
+
 /// Protocol version - bump on breaking changes
 pub const PROTOCOL_VERSION: u16 = 1;
 
@@ -424,11 +428,11 @@ pub const Protocol = enum(u8) {
 
 pub const INVALID_SOCKET: u16 = 0xFFFF;
 
-/// Maximum data bytes in a single SEND message (248 - 4 byte header)
-pub const MAX_SEND_DATA: usize = 244;
+/// Maximum data bytes in a single SEND message (payload minus 4-byte header)
+pub const MAX_SEND_DATA: usize = PAYLOAD_SIZE - 4;
 
-/// Maximum data bytes in a single RECV response (248 - 8 byte header)
-pub const MAX_RECV_DATA: usize = 240;
+/// Maximum data bytes in a single RECV response (payload minus 8-byte header)
+pub const MAX_RECV_DATA: usize = PAYLOAD_SIZE - 8;
 
 /// Maximum hostname length for DNS resolution
 pub const MAX_HOSTNAME_LEN: usize = 240;
@@ -454,14 +458,14 @@ pub const ConnectRequest = struct {
     port: u16,
     protocol: Protocol,
 
-    pub fn serialize(self: ConnectRequest, payload: *[248]u8) void {
+    pub fn serialize(self: ConnectRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU32(payload, 0, self.ip);
         writeU16(payload, 4, self.port);
         payload[6] = @intFromEnum(self.protocol);
     }
 
-    pub fn deserialize(payload: *const [248]u8) ConnectRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ConnectRequest {
         return .{
             .ip = readU32(payload, 0),
             .port = readU16(payload, 4),
@@ -482,7 +486,7 @@ pub const ConnectResult = struct {
     recv_shm_handle: u64,
     send_shm_handle: u64,
 
-    pub fn serialize(self: ConnectResult, payload: *[248]u8) void {
+    pub fn serialize(self: ConnectResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         writeU16(payload, 2, self.error_code);
@@ -490,7 +494,7 @@ pub const ConnectResult = struct {
         writeU64(payload, 12, self.send_shm_handle);
     }
 
-    pub fn deserialize(payload: *const [248]u8) ConnectResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ConnectResult {
         return .{
             .socket = readU16(payload, 0),
             .error_code = readU16(payload, 2),
@@ -504,7 +508,7 @@ pub const SendRequest = struct {
     socket: Socket,
     len: u16,
 
-    pub fn serialize(self: SendRequest, payload: *[248]u8, data: []const u8) void {
+    pub fn serialize(self: SendRequest, payload: *[PAYLOAD_SIZE]u8, data: []const u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         const actual_len: u16 = @intCast(@min(data.len, MAX_SEND_DATA));
@@ -514,7 +518,7 @@ pub const SendRequest = struct {
         }
     }
 
-    pub fn deserialize(payload: *const [248]u8) struct { header: SendRequest, data: []const u8 } {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) struct { header: SendRequest, data: []const u8 } {
         const socket = readU16(payload, 0);
         const len = readU16(payload, 2);
         const actual_len = @min(len, MAX_SEND_DATA);
@@ -530,14 +534,14 @@ pub const SendResult = struct {
     sent: u16,
     error_code: u16,
 
-    pub fn serialize(self: SendResult, payload: *[248]u8) void {
+    pub fn serialize(self: SendResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         writeU16(payload, 2, self.sent);
         writeU16(payload, 4, self.error_code);
     }
 
-    pub fn deserialize(payload: *const [248]u8) SendResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) SendResult {
         return .{
             .socket = readU16(payload, 0),
             .sent = readU16(payload, 2),
@@ -551,14 +555,14 @@ pub const RecvRequest = struct {
     max_len: u16,
     timeout_ms: u16,
 
-    pub fn serialize(self: RecvRequest, payload: *[248]u8) void {
+    pub fn serialize(self: RecvRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         writeU16(payload, 2, self.max_len);
         writeU16(payload, 4, self.timeout_ms);
     }
 
-    pub fn deserialize(payload: *const [248]u8) RecvRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) RecvRequest {
         return .{
             .socket = readU16(payload, 0),
             .max_len = readU16(payload, 2),
@@ -572,7 +576,7 @@ pub const RecvResult = struct {
     len: u16,
     error_code: u16,
 
-    pub fn serialize(self: RecvResult, payload: *[248]u8, data: []const u8) void {
+    pub fn serialize(self: RecvResult, payload: *[PAYLOAD_SIZE]u8, data: []const u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
         writeU16(payload, 2, self.len);
@@ -583,7 +587,7 @@ pub const RecvResult = struct {
         }
     }
 
-    pub fn deserialize(payload: *const [248]u8) struct { header: RecvResult, data: []const u8 } {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) struct { header: RecvResult, data: []const u8 } {
         const socket = readU16(payload, 0);
         const len = readU16(payload, 2);
         const error_code = readU16(payload, 4);
@@ -598,12 +602,12 @@ pub const RecvResult = struct {
 pub const CloseRequest = struct {
     socket: Socket,
 
-    pub fn serialize(self: CloseRequest, payload: *[248]u8) void {
+    pub fn serialize(self: CloseRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket);
     }
 
-    pub fn deserialize(payload: *const [248]u8) CloseRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) CloseRequest {
         return .{ .socket = readU16(payload, 0) };
     }
 };
@@ -613,7 +617,7 @@ pub const CloseRequest = struct {
 pub const DnsRequest = struct {
     hostname_len: u16,
 
-    pub fn serialize(self: DnsRequest, payload: *[248]u8, hostname: []const u8) void {
+    pub fn serialize(self: DnsRequest, payload: *[PAYLOAD_SIZE]u8, hostname: []const u8) void {
         @memset(payload, 0);
         const actual_len: u16 = @intCast(@min(hostname.len, MAX_HOSTNAME_LEN));
         writeU16(payload, 0, actual_len);
@@ -623,7 +627,7 @@ pub const DnsRequest = struct {
         _ = self;
     }
 
-    pub fn deserialize(payload: *const [248]u8) struct { len: u16, hostname: []const u8 } {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) struct { len: u16, hostname: []const u8 } {
         const len = readU16(payload, 0);
         const actual_len = @min(len, MAX_HOSTNAME_LEN);
         return .{
@@ -638,14 +642,14 @@ pub const DnsResult = struct {
     addr_count: u16,
     addr: Ipv4,
 
-    pub fn serialize(self: DnsResult, payload: *[248]u8) void {
+    pub fn serialize(self: DnsResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.error_code);
         writeU16(payload, 2, self.addr_count);
         writeU32(payload, 4, self.addr);
     }
 
-    pub fn deserialize(payload: *const [248]u8) DnsResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) DnsResult {
         return .{
             .error_code = readU16(payload, 0),
             .addr_count = readU16(payload, 2),
@@ -661,14 +665,14 @@ pub const PingRequest = struct {
     seq: u16,
     timeout_ms: u16,
 
-    pub fn serialize(self: PingRequest, payload: *[248]u8) void {
+    pub fn serialize(self: PingRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU32(payload, 0, self.ip);
         writeU16(payload, 4, self.seq);
         writeU16(payload, 6, self.timeout_ms);
     }
 
-    pub fn deserialize(payload: *const [248]u8) PingRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) PingRequest {
         return .{
             .ip = readU32(payload, 0),
             .seq = readU16(payload, 4),
@@ -683,7 +687,7 @@ pub const PingResult = struct {
     rtt_us: u32,
     ttl: u8,
 
-    pub fn serialize(self: PingResult, payload: *[248]u8) void {
+    pub fn serialize(self: PingResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.error_code);
         writeU16(payload, 2, self.seq);
@@ -691,7 +695,7 @@ pub const PingResult = struct {
         payload[8] = self.ttl;
     }
 
-    pub fn deserialize(payload: *const [248]u8) PingResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) PingResult {
         return .{
             .error_code = readU16(payload, 0),
             .seq = readU16(payload, 2),
@@ -709,13 +713,13 @@ pub const PingGatewayRequest = struct {
     seq: u16,
     timeout_ms: u16,
 
-    pub fn serialize(self: PingGatewayRequest, payload: *[248]u8) void {
+    pub fn serialize(self: PingGatewayRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.seq);
         writeU16(payload, 2, self.timeout_ms);
     }
 
-    pub fn deserialize(payload: *const [248]u8) PingGatewayRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) PingGatewayRequest {
         return .{
             .seq = readU16(payload, 0),
             .timeout_ms = readU16(payload, 2),
@@ -728,12 +732,12 @@ pub const PingGatewayRequest = struct {
 pub const TestDnsRequest = struct {
     timeout_ms: u16,
 
-    pub fn serialize(self: TestDnsRequest, payload: *[248]u8) void {
+    pub fn serialize(self: TestDnsRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.timeout_ms);
     }
 
-    pub fn deserialize(payload: *const [248]u8) TestDnsRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) TestDnsRequest {
         return .{ .timeout_ms = readU16(payload, 0) };
     }
 };
@@ -744,14 +748,14 @@ pub const TestDnsResult = struct {
     dns_server: Ipv4,
     rtt_us: u32,
 
-    pub fn serialize(self: TestDnsResult, payload: *[248]u8) void {
+    pub fn serialize(self: TestDnsResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.error_code);
         writeU32(payload, 2, self.dns_server);
         writeU32(payload, 6, self.rtt_us);
     }
 
-    pub fn deserialize(payload: *const [248]u8) TestDnsResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) TestDnsResult {
         return .{
             .error_code = readU16(payload, 0),
             .dns_server = readU32(payload, 2),
@@ -762,11 +766,11 @@ pub const TestDnsResult = struct {
 
 /// Request for network configuration (escape hatch)
 pub const GetConfigRequest = struct {
-    pub fn serialize(_: GetConfigRequest, payload: *[248]u8) void {
+    pub fn serialize(_: GetConfigRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
     }
 
-    pub fn deserialize(_: *const [248]u8) GetConfigRequest {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) GetConfigRequest {
         return .{};
     }
 };
@@ -781,7 +785,7 @@ pub const ConfigResult = struct {
     dns_secondary: Ipv4,
     link_up: bool,
 
-    pub fn serialize(self: ConfigResult, payload: *[248]u8) void {
+    pub fn serialize(self: ConfigResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.error_code);
         writeU32(payload, 4, self.ip);
@@ -792,7 +796,7 @@ pub const ConfigResult = struct {
         payload[24] = if (self.link_up) 1 else 0;
     }
 
-    pub fn deserialize(payload: *const [248]u8) ConfigResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ConfigResult {
         return .{
             .error_code = readU16(payload, 0),
             .ip = readU32(payload, 4),
@@ -809,12 +813,12 @@ pub const ConfigResult = struct {
 pub const TestConnectivityRequest = struct {
     timeout_ms: u16,
 
-    pub fn serialize(self: TestConnectivityRequest, payload: *[248]u8) void {
+    pub fn serialize(self: TestConnectivityRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.timeout_ms);
     }
 
-    pub fn deserialize(payload: *const [248]u8) TestConnectivityRequest {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) TestConnectivityRequest {
         return .{ .timeout_ms = readU16(payload, 0) };
     }
 };
@@ -826,7 +830,7 @@ pub const TestConnectivityResult = struct {
     gateway_reachable: bool,
     dns_reachable: bool,
 
-    pub fn serialize(self: TestConnectivityResult, payload: *[248]u8) void {
+    pub fn serialize(self: TestConnectivityResult, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.error_code);
         payload[2] = if (self.link_up) 1 else 0;
@@ -834,7 +838,7 @@ pub const TestConnectivityResult = struct {
         payload[4] = if (self.dns_reachable) 1 else 0;
     }
 
-    pub fn deserialize(payload: *const [248]u8) TestConnectivityResult {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) TestConnectivityResult {
         return .{
             .error_code = readU16(payload, 0),
             .link_up = payload[2] != 0,
@@ -851,41 +855,6 @@ pub const TestConnectivityResult = struct {
 /// Create IPv4 address from octets (a.b.c.d)
 pub fn makeIpv4(a: u8, b: u8, c: u8, d: u8) Ipv4 {
     return @as(u32, a) | (@as(u32, b) << 8) | (@as(u32, c) << 16) | (@as(u32, d) << 24);
-}
-
-/// Format IPv4 address to buffer, returns slice of written bytes
-pub fn formatIpv4(ip: Ipv4, buf: []u8) []u8 {
-    var pos: usize = 0;
-    inline for (0..4) |i| {
-        const octet: u8 = @truncate(ip >> @intCast(i * 8));
-        pos += formatDecimal(octet, buf[pos..]);
-        if (i < 3 and pos < buf.len) {
-            buf[pos] = '.';
-            pos += 1;
-        }
-    }
-    return buf[0..pos];
-}
-
-fn formatDecimal(value: u8, buf: []u8) usize {
-    if (buf.len == 0) return 0;
-    if (value == 0) {
-        buf[0] = '0';
-        return 1;
-    }
-    var digits: [3]u8 = undefined;
-    var count: usize = 0;
-    var v = value;
-    while (v > 0) {
-        digits[count] = @truncate((v % 10) + '0');
-        count += 1;
-        v /= 10;
-    }
-    var i: usize = 0;
-    while (i < count and i < buf.len) : (i += 1) {
-        buf[i] = digits[count - 1 - i];
-    }
-    return count;
 }
 
 /// Check if a message type is a socket API message (0x2000-0x2FFF)
@@ -912,13 +881,13 @@ pub const ShmDataReadyPayload = struct {
     socket_id: u16,
     bytes_available: u32,
 
-    pub fn serialize(self: ShmDataReadyPayload, payload: *[248]u8) void {
+    pub fn serialize(self: ShmDataReadyPayload, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
         writeU16(payload, 0, self.socket_id);
         writeU32(payload, 2, self.bytes_available);
     }
 
-    pub fn deserialize(payload: *const [248]u8) ShmDataReadyPayload {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ShmDataReadyPayload {
         return .{
             .socket_id = readU16(payload, 0),
             .bytes_available = readU32(payload, 2),

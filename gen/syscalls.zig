@@ -25,6 +25,7 @@ pub const Syscall = enum(u64) {
     container_stats = 118,
     set_memory_limit = 119,
     container_counter_snapshot = 122,
+    set_affinity = 127,
     icc_send = 120,
     icc_recv = 121,
     icc_peek = 123,
@@ -77,7 +78,7 @@ pub const Syscall = enum(u64) {
     pwrite = 236,
 };
 
-pub const Message = extern struct { source_id: u16, msg_type: u16, flags: u32, payload: [248]u8 };
+pub const Message = extern struct { source_id: u16, msg_type: u16, flags: u32, payload: [PAYLOAD_SIZE]u8, pub const PAYLOAD_SIZE = 248; };
 pub const DeviceInfo = extern struct { id: u32, mmio_base: u64, mmio_size: u64, irq: u32, irq2: u32, compatible: [64]u8 };
 pub const RegEntry = extern struct { phys_addr: u64, size: u64 };
 pub const DeviceGraphNode = extern struct {
@@ -179,6 +180,23 @@ pub const ContainerCounters = extern struct {
     /// Failed allocs / null-tcb halts appear in kernel log instead and
     /// are not counted here.
     fp_trap_count: u64,
+};
+/// In/out parameter block for console_ctl op=6 (kernel log cursor read).
+/// The cursor is a monotonic count of bytes ever logged (u64; survives
+/// ring overflow and never resets), so any number of pollers can page
+/// through history independently without consuming it.
+pub const KlogCursorRead = extern struct {
+    /// In: cursor from a previous call (0 = oldest retained byte).
+    /// Out: cursor to pass on the next call.
+    cursor: u64,
+    /// In: user destination buffer.
+    buf_ptr: u64,
+    /// In: destination capacity in bytes. 0 = don't read, just report
+    /// the current end-of-log cursor (poll-from-now bootstrap).
+    buf_len: u64,
+    /// Out: bytes lost to ring overflow between the passed cursor and
+    /// the oldest retained byte (0 when the cursor was still in range).
+    dropped: u64,
 };
 pub const DirEntry = extern struct {
     name: [64]u8,
@@ -387,6 +405,10 @@ pub inline fn set_memory_limit(target_container_id: u16, limit_pages: u32) u64 {
 
 pub inline fn container_counter_snapshot(cid: u16, out_ptr: *ContainerCounters) u64 {
     return svc2(@intFromEnum(Syscall.container_counter_snapshot), cid, @intFromPtr(out_ptr));
+}
+
+pub inline fn set_affinity(cpu: u64) u64 {
+    return svc1(@intFromEnum(Syscall.set_affinity), cpu);
 }
 
 pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {

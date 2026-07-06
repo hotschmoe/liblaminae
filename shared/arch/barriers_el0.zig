@@ -12,7 +12,6 @@
 /// - ish (inner shareable): Affects all cores in the same inner shareable domain
 /// - osh (outer shareable): Affects cores in the outer shareable domain
 /// - nsh (non-shareable): Affects only the executing core
-
 /// Data memory barrier - system scope
 /// Ensures all memory accesses before the barrier complete before memory accesses after it
 pub fn dataMemoryBarrier() void {

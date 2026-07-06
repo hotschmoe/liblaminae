@@ -20,6 +20,7 @@
 //------------------------------------------------------------------------------
 
 const std = @import("std");
+const shared_fmt = @import("../shared/fmt.zig");
 const uva_layout = @import("../shared/uva_layout.zig");
 
 /// Tier-contract classification (tier_contract.md, audited by `lib/_audit.zig`).
@@ -129,43 +130,14 @@ pub fn putc(c: u8) void {
 /// Print a number in decimal
 pub fn printNum(n: u64) void {
     var buf: [20]u8 = undefined;
-    var i: usize = 20;
-    var num = n;
-
-    if (num == 0) {
-        print("0");
-        return;
-    }
-
-    while (num > 0) : (num /= 10) {
-        i -= 1;
-        buf[i] = @intCast('0' + (num % 10));
-    }
-
-    print(buf[i..20]);
+    print(shared_fmt.dec(n, &buf));
 }
 
 /// Print a number in hexadecimal (with 0x prefix)
 pub fn printHex(n: u64) void {
-    const hex_chars = "0123456789abcdef";
-    var buf: [18]u8 = undefined; // "0x" + 16 hex digits
-    buf[0] = '0';
-    buf[1] = 'x';
-
-    var i: usize = 17;
-    var num = n;
-
-    if (num == 0) {
-        print("0x0");
-        return;
-    }
-
-    while (num > 0 and i >= 2) : (num >>= 4) {
-        buf[i] = hex_chars[@intCast(num & 0xF)];
-        i -= 1;
-    }
-
-    print(buf[i + 1 .. 18]);
+    var buf: [16]u8 = undefined;
+    print("0x");
+    print(shared_fmt.hex(n, .lower, &buf));
 }
 
 //------------------------------------------------------------------------------

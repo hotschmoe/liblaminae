@@ -17,6 +17,10 @@
 //
 //------------------------------------------------------------------------------
 
+/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// this module is import-free by design; lib/root.zig asserts the mirror.
+pub const PAYLOAD_SIZE = 248;
+
 /// Namespace name registered by the block driver at boot.
 /// The client looks this up via `ns_lookup` to discover the peer ID.
 pub const NAMESPACE: []const u8 = "blk.driver";
@@ -55,23 +59,23 @@ pub const BlkStatus = struct {
 // Helpers — packed-byte encode / decode for unaligned payload offsets.
 //------------------------------------------------------------------------------
 
-inline fn writeU64(payload: *[248]u8, offset: usize, value: u64) void {
+inline fn writeU64(payload: *[PAYLOAD_SIZE]u8, offset: usize, value: u64) void {
     @as(*align(1) u64, @ptrCast(&payload[offset])).* = value;
 }
 
-inline fn readU64(payload: *const [248]u8, offset: usize) u64 {
+inline fn readU64(payload: *const [PAYLOAD_SIZE]u8, offset: usize) u64 {
     return @as(*align(1) const u64, @ptrCast(&payload[offset])).*;
 }
 
-inline fn writeU32(payload: *[248]u8, offset: usize, value: u32) void {
+inline fn writeU32(payload: *[PAYLOAD_SIZE]u8, offset: usize, value: u32) void {
     @as(*align(1) u32, @ptrCast(&payload[offset])).* = value;
 }
 
-inline fn readU32(payload: *const [248]u8, offset: usize) u32 {
+inline fn readU32(payload: *const [PAYLOAD_SIZE]u8, offset: usize) u32 {
     return @as(*align(1) const u32, @ptrCast(&payload[offset])).*;
 }
 
-inline fn writeU16(payload: *[248]u8, offset: usize, value: u16) void {
+inline fn writeU16(payload: *[PAYLOAD_SIZE]u8, offset: usize, value: u16) void {
     @as(*align(1) u16, @ptrCast(&payload[offset])).* = value;
 }
 
@@ -86,9 +90,9 @@ pub const GetDeviceInfo = struct {
     pub const Request = struct {};
     pub const Reply = struct { capacity: u64, sector_size: u32 };
 
-    pub fn serialize(_: Request, _: *[248]u8) void {}
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{
             .capacity = readU64(payload, 0),
             .sector_size = readU32(payload, 8),
@@ -116,12 +120,12 @@ pub const ReadSector = struct {
         data: [MAX_PAYLOAD_DATA]u8,
     };
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeU64(payload, 0, req.sector);
         writeU16(payload, 8, req.count);
     }
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         var reply: Reply = .{ .status = payload[0], .data = undefined };
         @memcpy(&reply.data, payload[1..][0..MAX_PAYLOAD_DATA]);
         return reply;
@@ -149,14 +153,14 @@ pub const WriteSector = struct {
     };
     pub const Reply = struct { status: u8 };
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeU64(payload, 0, req.sector);
         writeU16(payload, 8, req.count);
         const n = @min(req.data.len, MAX_PAYLOAD_DATA);
         @memcpy(payload[16 .. 16 + n], req.data[0..n]);
     }
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .status = payload[0] };
     }
 };

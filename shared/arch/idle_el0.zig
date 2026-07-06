@@ -14,7 +14,6 @@
 /// - wfi: Safe at EL0 (may trap to EL1 depending on HCR_EL2.TWI)
 /// - wfe: Safe at EL0 (may trap to EL1 depending on HCR_EL2.TWE)
 /// - sev: Safe at EL0
-
 /// Wait for interrupt - puts CPU in low-power state until interrupt
 ///
 /// The CPU will halt execution until an IRQ, FIQ, or async abort occurs.

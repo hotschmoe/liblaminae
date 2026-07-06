@@ -22,6 +22,10 @@
 //
 //------------------------------------------------------------------------------
 
+/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// this module is import-free by design; lib/root.zig asserts the mirror.
+pub const PAYLOAD_SIZE = 248;
+
 /// Default service name. The shell's `wasm <path>` command and `test_wasm3`
 /// look this up; daemonized instances re-register under different names
 /// via `SetName`.
@@ -60,7 +64,7 @@ pub const MAX_PAYLOAD_STR: usize = 247;
 /// payload[0], so the message body has one less byte than a request.
 pub const MAX_REPLY_STR: usize = 246;
 
-inline fn writeString(payload: *[248]u8, s: []const u8) void {
+inline fn writeString(payload: *[PAYLOAD_SIZE]u8, s: []const u8) void {
     const n = @min(s.len, MAX_PAYLOAD_STR);
     @memcpy(payload[0..n], s[0..n]);
 }
@@ -68,7 +72,7 @@ inline fn writeString(payload: *[248]u8, s: []const u8) void {
 /// Encode a Status + NUL-terminated body into a reply payload.
 /// Used by the wasm3 driver; clients use the matching `Reply.message()` /
 /// `Reply.output()` accessors to decode.
-pub fn writeReply(payload: *[248]u8, status: Status, body: []const u8) void {
+pub fn writeReply(payload: *[PAYLOAD_SIZE]u8, status: Status, body: []const u8) void {
     @memset(payload, 0);
     payload[0] = @intFromEnum(status);
     const n = @min(body.len, MAX_REPLY_STR);
@@ -76,16 +80,16 @@ pub fn writeReply(payload: *[248]u8, status: Status, body: []const u8) void {
 }
 
 /// Extract a NUL-trimmed string starting at `offset` from a payload.
-fn extractStringAt(payload: *const [248]u8, comptime offset: usize) []const u8 {
+fn extractStringAt(payload: *const [PAYLOAD_SIZE]u8, comptime offset: usize) []const u8 {
     var len: usize = 0;
-    const max = 248 - offset;
+    const max = PAYLOAD_SIZE - offset;
     while (len < max and payload[offset + len] != 0) : (len += 1) {}
     return payload[offset .. offset + len];
 }
 
 /// Extract a NUL-trimmed string from offset 0 of a payload. Used for
 /// request payloads (path, func name) that don't carry a status byte.
-pub fn extractString(payload: *const [248]u8) []const u8 {
+pub fn extractString(payload: *const [PAYLOAD_SIZE]u8) []const u8 {
     return extractStringAt(payload, 0);
 }
 
@@ -107,7 +111,7 @@ inline fn decodeStatus(b: u8) Status {
 
 pub const LoadReply = struct {
     status: Status,
-    payload: [248]u8,
+    payload: [PAYLOAD_SIZE]u8,
 
     /// NUL-trimmed message body. Empty on success; error string on failure.
     pub fn message(self: *const LoadReply) []const u8 {
@@ -120,17 +124,17 @@ pub const LoadModule = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.LOAD_RESULT;
     pub const Request = struct { path: []const u8 };
     pub const Reply = LoadReply;
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.path);
     }
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .status = decodeStatus(payload[0]), .payload = payload.* };
     }
 };
 
 pub const CallReply = struct {
     status: Status,
-    payload: [248]u8,
+    payload: [PAYLOAD_SIZE]u8,
 
     /// NUL-trimmed captured stdout. Empty on err or when the program
     /// produced no output.
@@ -144,10 +148,10 @@ pub const CallFunc = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.CALL_RESULT;
     pub const Request = struct { name: []const u8 };
     pub const Reply = CallReply;
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.name);
     }
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .status = decodeStatus(payload[0]), .payload = payload.* };
     }
 };
@@ -157,10 +161,10 @@ pub const SetName = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.SET_NAME_OK;
     pub const Request = struct { name: []const u8 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.name);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -170,8 +174,8 @@ pub const Ping = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.PONG;
     pub const Request = struct {};
     pub const Reply = struct {};
-    pub fn serialize(_: Request, _: *[248]u8) void {}
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -179,5 +183,5 @@ pub const Ping = struct {
 pub const Unload = struct {
     pub const REQ_TYPE: u16 = WasmMsgType.UNLOAD;
     pub const Request = struct {};
-    pub fn serialize(_: Request, _: *[248]u8) void {}
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
 };

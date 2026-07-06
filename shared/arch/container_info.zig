@@ -8,7 +8,6 @@
 ///
 /// This is safe at both EL0 and EL1 - TPIDRRO_EL0 is readable from any
 /// exception level.
-
 /// Get the current container's ID without a syscall.
 ///
 /// The kernel sets TPIDRRO_EL0 on context switch, so this is a single

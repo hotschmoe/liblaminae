@@ -17,6 +17,7 @@ pub const heap = @import("man/heap.zig");
 pub const tasks = @import("man/tasks.zig");
 pub const fwcfg = @import("man/fwcfg.zig");
 pub const virtio = @import("man/virtio.zig");
+pub const pcie = @import("man/pcie.zig");
 pub const socket_shm = @import("man/socket_shm.zig");
 pub const net_shm = @import("man/net_shm.zig");
 pub const net_protocol = @import("man/net_protocol.zig");
@@ -24,6 +25,7 @@ pub const rpc = @import("man/rpc.zig");
 pub const http = @import("man/http.zig");
 pub const socket_stream = @import("man/socket_stream.zig");
 pub const ring = @import("man/ring.zig");
+pub const fbcon = @import("man/fbcon.zig");
 
 // T2 RPC client modules — thin clients of named peer containers
 pub const init_client = @import("init_client/api.zig");
@@ -42,6 +44,8 @@ pub const syscalls = @import("gen/syscalls.zig");
 pub const errors = @import("gen/errors.zig");
 
 // Shared modules (lib/shared/) - synced from src/shared/
+pub const fmt = @import("shared/fmt.zig");
+pub const font = @import("shared/font.zig");
 pub const shm = @import("shared/shm.zig");
 pub const va_layout = @import("shared/va_layout.zig");
 pub const uva_layout = @import("shared/uva_layout.zig");
@@ -59,6 +63,16 @@ pub const ContainerType = container_type.ContainerType;
 pub const net_stack_protocol = @import("net_stack_protocol");
 pub const platform_types = @import("platform_types");
 pub const PlatformType = platform_types.PlatformType;
+
+// The standalone protocol modules mirror icc_schema.PAYLOAD_SIZE (they are
+// import-free single-file modules). Hold the mirrors to the canonical value.
+comptime {
+    for (.{ init_protocol, platform_protocol, blk_protocol, wasm_protocol, net_stack_protocol }) |p| {
+        if (p.PAYLOAD_SIZE != icc_schema.PAYLOAD_SIZE) {
+            @compileError("protocol module PAYLOAD_SIZE mirror drifted from icc_schema.PAYLOAD_SIZE");
+        }
+    }
+}
 
 /// Check if a return value is an error code
 pub const isError = errors.isError;

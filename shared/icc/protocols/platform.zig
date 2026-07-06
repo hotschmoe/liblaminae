@@ -15,6 +15,10 @@
 //
 //------------------------------------------------------------------------------
 
+/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// this module is import-free by design; lib/root.zig asserts the mirror.
+pub const PAYLOAD_SIZE = 248;
+
 /// Namespace name registered by the platform container at boot.
 /// The client looks this up via `ns_lookup` to discover the peer ID.
 pub const NAMESPACE: []const u8 = "platform";
@@ -65,7 +69,7 @@ pub const PlatformMsgType = struct {
 //------------------------------------------------------------------------------
 
 /// Helper: encode a u32 ID at payload offset 0.
-fn writeU32(payload: *[248]u8, value: u32) void {
+fn writeU32(payload: *[PAYLOAD_SIZE]u8, value: u32) void {
     @as(*align(1) u32, @ptrCast(&payload[0])).* = value;
 }
 
@@ -74,10 +78,10 @@ pub const EnableClock = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.ENABLE_CLOCK_OK;
     pub const Request = struct { clock_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.clock_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -87,10 +91,10 @@ pub const DisableClock = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.DISABLE_CLOCK_OK;
     pub const Request = struct { clock_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.clock_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -100,10 +104,10 @@ pub const DeassertReset = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.DEASSERT_RESET_OK;
     pub const Request = struct { reset_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.reset_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -113,10 +117,10 @@ pub const AssertReset = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.ASSERT_RESET_OK;
     pub const Request = struct { reset_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.reset_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -126,10 +130,10 @@ pub const EnablePower = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.ENABLE_POWER_OK;
     pub const Request = struct { power_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.power_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -139,10 +143,10 @@ pub const DisablePower = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.DISABLE_POWER_OK;
     pub const Request = struct { power_id: u32 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.power_id);
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -152,8 +156,8 @@ pub const GetMac = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.MAC_ADDRESS_OK;
     pub const Request = struct {};
     pub const Reply = struct { mac: [6]u8 };
-    pub fn serialize(_: Request, _: *[248]u8) void {}
-    pub fn deserialize(p: *const [248]u8) Reply {
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
+    pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .mac = p[0..6].* };
     }
 };
@@ -163,8 +167,8 @@ pub const GetBoardSerial = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.BOARD_SERIAL_OK;
     pub const Request = struct {};
     pub const Reply = struct { serial: u64 };
-    pub fn serialize(_: Request, _: *[248]u8) void {}
-    pub fn deserialize(p: *const [248]u8) Reply {
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
+    pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .serial = @as(*align(1) const u64, @ptrCast(&p[0])).* };
     }
 };
@@ -174,8 +178,8 @@ pub const GetBoardRevision = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.BOARD_REVISION_OK;
     pub const Request = struct {};
     pub const Reply = struct { revision: u32 };
-    pub fn serialize(_: Request, _: *[248]u8) void {}
-    pub fn deserialize(p: *const [248]u8) Reply {
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
+    pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .revision = @as(*align(1) const u32, @ptrCast(&p[0])).* };
     }
 };
@@ -185,11 +189,11 @@ pub const SetClockRate = struct {
     pub const REPLY_TYPE: u16 = PlatformMsgType.SET_CLOCK_RATE_OK;
     pub const Request = struct { clock_id: u32, rate_hz: u64 };
     pub const Reply = struct {};
-    pub fn serialize(req: Request, p: *[248]u8) void {
+    pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         @as(*align(1) u32, @ptrCast(&p[0])).* = req.clock_id;
         @as(*align(1) u64, @ptrCast(&p[4])).* = req.rate_hz;
     }
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };

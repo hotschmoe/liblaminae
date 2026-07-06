@@ -113,8 +113,7 @@ fn switchContext(from: *SavedContext, to: *SavedContext) void {
         :
         : [from] "r" (from),
           [to] "r" (to),
-        : .{ .x9 = true, .memory = true }
-    );
+        : .{ .x9 = true, .memory = true });
 }
 
 /// Task entry wrapper - calls user entry function then marks task as done

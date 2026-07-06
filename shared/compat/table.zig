@@ -38,6 +38,7 @@ pub const Class = enum {
     gpio,
     rtc,
     display,
+    usb,
 };
 
 /// Execution container kind (mirrors kernel ContainerType numerics)
@@ -176,6 +177,31 @@ pub const table = [_]CompatEntry{
         .status = .supported,
         .notes = "QEMU fw_cfg MMIO -- ramfbd consumes etc/ramfb when present",
     },
+
+    // =========================================================================
+    // Lamina-handled: MS-R1 (CIX CP8180) synthetic devices
+    // =========================================================================
+    // MS-R1 firmware is ACPI-only (no DTB); these compatibles are synthesized
+    // by device_manager.applyFallbacks() from surveyed platform constants.
+    // See docs/roadmap/ms_r1_deployment/findings.md "Device1 NIC + USB survey".
+    .{
+        .compatible = "pcie,rtl8127",
+        .class = .network,
+        .handler = .lamina,
+        .driver_binary = "netd",
+        .container_kind = .driver,
+        .status = .supported,
+        .notes = "Realtek RTL8127 10GbE behind a sky1 PCIe RC (ECAM + BAR window regs); netd rtl8127 backend",
+    },
+    .{
+        .compatible = "cdns,usbssp-xhci",
+        .class = .usb,
+        .handler = .lamina,
+        .driver_binary = "xhcid",
+        .container_kind = .driver,
+        .status = .supported,
+        .notes = "Cadence USBSSP xHCI host block (MS-R1 CP8180); adopt-don't-init, firmware leaves it running",
+    },
 };
 
 //------------------------------------------------------------------------------
@@ -244,14 +270,4 @@ comptime {
             @compileError("Kernel-handled entry has driver_binary (ignored): " ++ entry.compatible);
         }
     }
-}
-
-//------------------------------------------------------------------------------
-// Self-Test (runtime, for debugging)
-//------------------------------------------------------------------------------
-
-/// Runtime self-test for invariants that can't be checked at comptime
-/// (Currently all checks are comptime, so this just returns true)
-pub fn selfTest() bool {
-    return true;
 }

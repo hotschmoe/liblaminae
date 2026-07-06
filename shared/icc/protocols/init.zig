@@ -17,6 +17,10 @@
 //
 //------------------------------------------------------------------------------
 
+/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// this module is import-free by design; lib/root.zig asserts the mirror.
+pub const PAYLOAD_SIZE = 248;
+
 /// Lamina's container ID is fixed at 1 by `boot_contract.md` §9.4 (the
 /// kernel spawns exactly one T2 container, and it's lamina). Pinned here
 /// so client code doesn't have to ns_lookup.
@@ -64,7 +68,7 @@ pub const SPAWN_ARGS_SEP: u8 = 0xFF;
 
 /// Helper: encode a u64 at payload offset 0 (the dominant scalar shape
 /// across these specs — container IDs and exit codes).
-fn writeU64(payload: *[248]u8, value: u64) void {
+fn writeU64(payload: *[PAYLOAD_SIZE]u8, value: u64) void {
     @as(*align(1) u64, @ptrCast(&payload[0])).* = value;
 }
 
@@ -79,11 +83,11 @@ pub const Spawn = struct {
     pub const Request = struct { name: []const u8 };
     pub const Reply = struct { id: u64, err: u64 };
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         @memcpy(payload[0..req.name.len], req.name);
     }
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{
             .id = @bitCast(payload[0..8].*),
             .err = @bitCast(payload[8..16].*),
@@ -102,13 +106,13 @@ pub const SpawnWithArgs = struct {
     pub const Request = struct { name: []const u8, argv_data: []const u8 };
     pub const Reply = Spawn.Reply;
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         @memcpy(payload[0..req.name.len], req.name);
         payload[req.name.len] = SPAWN_ARGS_SEP;
         @memcpy(payload[req.name.len + 1 ..][0..req.argv_data.len], req.argv_data);
     }
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return Spawn.deserialize(payload);
     }
 };
@@ -124,9 +128,9 @@ pub const SpawnShell = struct {
     pub const Request = struct {};
     pub const Reply = struct { shell_id: u64, err: u64 };
 
-    pub fn serialize(_: Request, _: *[248]u8) void {}
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{
             .shell_id = @bitCast(payload[0..8].*),
             .err = @bitCast(payload[8..16].*),
@@ -145,11 +149,11 @@ pub const Kill = struct {
     pub const Request = struct { container_id: u64 };
     pub const Reply = struct { result: u64 };
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeU64(payload, req.container_id);
     }
 
-    pub fn deserialize(payload: *const [248]u8) Reply {
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .result = @bitCast(payload[0..8].*) };
     }
 };
@@ -165,11 +169,11 @@ pub const ConsoleSwitch = struct {
     pub const Request = struct { target_id: u64 };
     pub const Reply = struct {};
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeU64(payload, req.target_id);
     }
 
-    pub fn deserialize(_: *const [248]u8) Reply {
+    pub fn deserialize(_: *const [PAYLOAD_SIZE]u8) Reply {
         return .{};
     }
 };
@@ -182,7 +186,7 @@ pub const Shutdown = struct {
     pub const REQ_TYPE: u16 = InitMsgType.SHUTDOWN;
     pub const Request = struct { exit_code: u64 };
 
-    pub fn serialize(req: Request, payload: *[248]u8) void {
+    pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeU64(payload, req.exit_code);
     }
 };
@@ -195,5 +199,5 @@ pub const Reboot = struct {
     pub const REQ_TYPE: u16 = InitMsgType.REBOOT;
     pub const Request = struct {};
 
-    pub fn serialize(_: Request, _: *[248]u8) void {}
+    pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
 };

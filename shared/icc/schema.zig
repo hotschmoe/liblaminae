@@ -1,5 +1,3 @@
-const std = @import("std");
-
 /// Describes a single IPC message ID.
 pub const Message = struct {
     id: u16,
@@ -8,14 +6,24 @@ pub const Message = struct {
     desc: []const u8 = "",
 };
 
+/// ICC message payload size: 256-byte message minus the 8-byte header.
+/// ABI constant. The standalone protocol modules (protocols/*.zig,
+/// net_stack_protocol.zig) mirror this value because they are import-free
+/// by design; lib/root.zig comptime-asserts the mirrors stay in sync.
+pub const PAYLOAD_SIZE = 248;
+
 /// Main IPC Message Structure (256 bytes)
 /// Must match kernel ABI.
 pub const IccMessage = extern struct {
     source_id: u16,
     msg_type: u16,
     flags: u32,
-    payload: [248]u8,
+    payload: [PAYLOAD_SIZE]u8,
 };
+
+comptime {
+    if (@sizeOf(IccMessage) != 256) @compileError("IccMessage must be exactly 256 bytes");
+}
 
 /// Group of related messages sharing an ID range.
 pub const MessageRange = struct {
