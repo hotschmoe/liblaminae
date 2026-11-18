@@ -3,7 +3,7 @@
 //
 // This defines platform identification types used by:
 // - Kernel platform detection (src/kernel/platform/platform.zig)
-// - User containers via get_platform() syscall
+// - User cells via get_platform() syscall
 //
 // Values correspond to what get_platform() syscall returns.
 //
@@ -22,7 +22,7 @@ pub const PlatformType = enum(u64) {
     /// QEMU virt machine (default development target)
     qemu_virt = 0,
     /// Minisforum MS-R1 (CIX CP8180). Real-hardware target; v1.0 goal.
-    /// Bring-up scaffolding only at the user-container level today;
+    /// Bring-up scaffolding only at the user-cell level today;
     /// kernel-side (GICv3, SCMI, EFI memmap) lands in Phase 3.
     ms_r1 = 1,
     /// Unknown platform (fallback). Preserved at 4 for ABI stability across
@@ -51,8 +51,8 @@ pub const PlatformType = enum(u64) {
         };
     }
 
-    /// Get platform container binary name.
-    /// Used by lamina.zig to spawn the correct platform container.
+    /// Get platform cell binary name.
+    /// Used by lamina.zig to spawn the correct platform cell.
     pub fn getName(self: PlatformType) []const u8 {
         return switch (self) {
             .qemu_virt => "virt",

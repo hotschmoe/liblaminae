@@ -6,25 +6,25 @@ A counting demonstration program for [Laminae OS](https://github.com/hotschmoe/l
 
 This is a bare-metal aarch64 program that demonstrates Laminae OS capabilities by:
 - Counting from 0 to 100 with timing information
-- Using multiple Laminae OS syscalls (get_time, sleep, get_container_id, get_platform)
+- Using multiple Laminae OS syscalls (get_time, sleep, get_cell_id, get_platform)
 - Demonstrating the zero-syscall console ring buffer system
 - Providing performance statistics and console buffer metrics
 
 ## Features Showcased
 
 ### Syscalls Used
-- **`get_container_id()`** - Retrieves the container's unique ID
+- **`get_cell_id()`** - Retrieves the cell's unique ID
 - **`get_platform()`** - Gets the hardware platform identifier
 - **`get_time()`** - Reads the system timer (nanoseconds since boot)
 - **`sleep(ns)`** - Suspends execution for a specified duration
-- **`exit(status)`** - Terminates the container with a status code
+- **`exit(status)`** - Terminates the cell with a status code
 
 ### Zero-Syscall Console
 The demo uses Laminae OS's innovative **zero-syscall console output** system:
-- Each container has a 64KB memory-mapped ring buffer
+- Each cell has a 64KB memory-mapped ring buffer
 - Writing to the console requires **no syscalls** - just memory writes
 - The kernel polls and drains the buffer to UART automatically
-- ASID-isolated, so each container has its own output buffer
+- ASID-isolated, so each cell has its own output buffer
 
 ## Building
 
@@ -50,8 +50,8 @@ The build system:
 ## Running
 
 To run this program, you need the Laminae OS kernel which will:
-1. Load the `big_counter` binary into a container
-2. Map the console ring buffer to the container's address space
+1. Load the `big_counter` binary into a cell
+2. Map the console ring buffer to the cell's address space
 3. Execute from the `_start` entry point
 4. Monitor the console buffer and output to UART
 
@@ -99,7 +99,7 @@ When run, the program produces:
    BIG COUNTER - Laminae OS Demo
 ========================================
 
-Container ID: 5
+Cell ID: 5
 Platform: 0x1234
 Boot time: 1500000000 ns
 
@@ -130,17 +130,17 @@ Exiting...
 
 ```
 big_counter/
-├── build.zig         # Zig build configuration
-├── build.zig.zon     # Dependency specification (liblaminae)
-├── user.ld           # Laminae OS userspace linker script
-├── src/
-│   └── main.zig      # Counter demo implementation
-├── example/          # Reference examples from Laminae OS
-│   ├── user.ld       # Original linker script
-│   ├── build_config.zig  # Kernel build system reference
-│   └── program/
-│       └── hello.zig # Minimal example
-└── README.md         # This file
++-- build.zig         # Zig build configuration
++-- build.zig.zon     # Dependency specification (liblaminae)
++-- user.ld           # Laminae OS userspace linker script
++-- src/
+|   +-- main.zig      # Counter demo implementation
++-- example/          # Reference examples from Laminae OS
+|   +-- user.ld       # Original linker script
+|   +-- build_config.zig  # Kernel build system reference
+|   +-- program/
+|       +-- hello.zig # Minimal example
++-- README.md         # This file
 ```
 
 ## Technical Details
@@ -174,7 +174,7 @@ inline fn svc0(num: u64) u64 {
 ### Console Ring Buffer
 Defined in `liblaminae/man/console.zig`:
 ```zig
-pub const ContainerConsole = ConsoleRing(64 * 1024 - 64);
+pub const CellConsole = ConsoleRing(64 * 1024 - 64);
 
 pub fn ConsoleRing(comptime capacity: usize) type {
     return extern struct {

@@ -1,10 +1,10 @@
 //------------------------------------------------------------------------------
 // VirtIO User-Space Library
 //
-// Phase 8.2: Provides VirtIO queue management for driver containers.
+// Phase 8.2: Provides VirtIO queue management for driver cells.
 //
 // This library implements the VirtIO specification (v1.2) for user-space
-// driver containers. It handles:
+// driver cells. It handles:
 // - MMIO register access (VirtIO over MMIO transport)
 // - Virtqueue initialization and management
 // - Descriptor chain building

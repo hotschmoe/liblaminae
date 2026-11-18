@@ -2,7 +2,7 @@
 // Shared no-alloc formatting primitives
 //------------------------------------------------------------------------------
 // Pure buffer formatters usable from kernel (EL1), liblaminae, and user
-// containers alike. No std, no allocation, no I/O -- callers own the buffer
+// cells alike. No std, no allocation, no I/O -- callers own the buffer
 // and route the returned slice to their own output path.
 //
 // Buffer sizing: dec() needs at most 20 bytes for a u64, hex() at most 16,

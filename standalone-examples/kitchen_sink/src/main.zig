@@ -1,8 +1,8 @@
 // =============================================================================
-// Laminae OS — "Kitchen Sink" Demo  (must stay < 8KB .bin)
+// Laminae OS -- "Kitchen Sink" Demo  (must stay < 8KB .bin)
 // =============================================================================
 // Exercises every user-accessible subsystem via raw syscalls.
-// No std imports — keeps binary tiny.
+// No std imports -- keeps binary tiny.
 // =============================================================================
 
 const lib = @import("liblaminae");
@@ -10,7 +10,7 @@ const sys = lib.syscalls;
 const barriers = lib.barriers;
 const uva = lib.uva_layout;
 
-// ─── Tiny Output (no std, no fmt) ───────────────────────────────────────────
+// --- Tiny Output (no std, no fmt) -------------------------------------------
 
 fn w(buf: []const u8) void {
     _ = sys.write(1, @ptrCast(buf.ptr), buf.len);
@@ -74,7 +74,7 @@ fn ok(label: []const u8) void {
     w("\n");
 }
 
-// ─── Console Ring direct access ─────────────────────────────────────────────
+// --- Console Ring direct access ---------------------------------------------
 
 const RingHdr = extern struct { write_idx: u32, read_idx: u32, sequence: u32, flags: u32, overflow_count: u32, _p: [44]u8 };
 
@@ -93,21 +93,21 @@ fn ringWrite(msg: []const u8) void {
     }
 }
 
-// ─── Entry ──────────────────────────────────────────────────────────────────
+// --- Entry ------------------------------------------------------------------
 
 export fn _start() noreturn {
     const t0 = sys.get_time();
 
     w("\n+== LAMINAE Kitchen Sink Demo ==+\n");
 
-    // ── 1. Identity & Platform ────────────────────────
+    // -- 1. Identity & Platform ------------------------
     hdr("1 Identity");
-    const cid = lib.getContainerId();
+    const cid = lib.getCellId();
     w("  CID(zero-sc): ");
     wn(cid);
     w("\n");
     w("  CID(syscall): ");
-    wn(sys.get_container_id());
+    wn(sys.get_cell_id());
     w("\n");
 
     const plat = lib.PlatformType.fromSyscall(sys.get_platform());
@@ -118,7 +118,7 @@ export fn _start() noreturn {
     wn(t0 / 1_000_000);
     w("ms\n");
 
-    // ── 2. Console Ring (zero-syscall I/O) ────────────
+    // -- 2. Console Ring (zero-syscall I/O) ------------
     hdr("2 Console Ring");
     ringWrite("[ring] zero-syscall write!\n");
     ok("ring buffer direct write");
@@ -136,7 +136,7 @@ export fn _start() noreturn {
     wh(uva.device.base);
     w("\n");
 
-    // ── 3. Timing ─────────────────────────────────────
+    // -- 3. Timing -------------------------------------
     hdr("3 Timing");
     const ys = sys.get_time();
     var yi: u32 = 0;
@@ -163,10 +163,10 @@ export fn _start() noreturn {
     wn(a2 - a1);
     w("ns\n");
 
-    // ── 4. Container List ─────────────────────────────
-    hdr("4 Containers");
-    var ib: [8]sys.ContainerInfo = undefined;
-    const lc = sys.container_list(&ib[0], 8);
+    // -- 4. Cell List -----------------------------
+    hdr("4 Cells");
+    var ib: [8]sys.CellInfo = undefined;
+    const lc = sys.cell_list(&ib[0], 8);
     if (!lib.isError(lc)) {
         w("  count=");
         wn(lc);
@@ -179,7 +179,7 @@ export fn _start() noreturn {
             w("] ");
             w(inf.getName());
             w(" t=");
-            wn(inf.container_type);
+            wn(inf.cell_type);
             w("\n");
         }
     } else {
@@ -187,7 +187,7 @@ export fn _start() noreturn {
     }
 
     var lb: [64]u8 = undefined;
-    const lr = sys.container_log_read(cid, &lb[0], 64);
+    const lr = sys.cell_log_read(cid, &lb[0], 64);
     if (!lib.isError(lr)) {
         w("  log(");
         wn(lr);
@@ -199,58 +199,28 @@ export fn _start() noreturn {
         res("log", lr);
     }
 
-    // ── 5. Namespace ──────────────────────────────────
-    hdr("5 Namespace");
-    const sn = "demo.ks";
-    res("register", sys.ns_register(&sn[0], sn.len));
-    const lu = sys.ns_lookup(&sn[0], sn.len);
-    if (!lib.isError(lu)) {
-        w("  lookup => ");
-        wn(lu);
-        if (lu == cid) w(" (self)");
-        w("\n");
-    } else {
-        res("lookup", lu);
-    }
-    const fk = "no.svc";
-    if (lib.isError(sys.ns_lookup(&fk[0], fk.len))) {
-        ok("miss => error (ok)");
-    }
+    // (Section 5 was the Break 6 namespace demo; the ns_* syscalls were
+    // deleted 2026-07-21 -- discovery is manifest-wired channels now.)
 
-    // ── 6. Shared Memory ──────────────────────────────
+    // -- 6. Shared Memory ------------------------------
     hdr("6 SHM");
     const sh = sys.map_create(1, 0);
     if (!lib.isError(sh)) {
         ok("map_create");
         const create_token = sys.MapResult.token(sh);
         const create_va = sys.MapResult.va(sh);
-        // Retrieve cross-container handle to pass to map_attach (same container here, for test).
-        const handle = sys.map_handle(create_token);
-        const sv = sys.map_attach(handle, 0x3);
-        if (!lib.isError(sv)) {
-            ok("map_attach(RW)");
-            const attach_token = sys.MapResult.token(sv);
-            // Write via create mapping, verify via attach mapping (same phys pages)
-            const pw: [*]volatile u8 = @ptrFromInt(create_va);
-            pw[0] = 0xCA;
-            pw[1] = 0xFE;
-            pw[2] = 0xBA;
-            pw[3] = 0xBE;
-            barriers.dataMemoryBarrier();
-            const attach_va = sys.MapResult.va(sv);
-            const pr: [*]volatile u8 = @ptrFromInt(attach_va);
-            if (pr[0] == 0xCA and pr[1] == 0xFE) ok("SHM verify 0xCAFE");
-            res("detach", sys.map_detach(attach_token));
-        } else {
-            res("attach", sv);
-        }
-        // Detach the owner mapping (create_token) to release the last ref.
-        _ = sys.map_detach(create_token);
+        const pw: [*]volatile u8 = @ptrFromInt(create_va);
+        pw[0] = 0xCA;
+        pw[1] = 0xFE;
+        if (pw[0] == 0xCA and pw[1] == 0xFE) ok("SHM writeback");
+        const sz = sys.map_size(create_token);
+        if (!lib.isError(sz) and sz == 4096) ok("map_size");
+        res("detach", sys.map_detach(create_token));
     } else {
         res("map_create", sh);
     }
 
-    // ── 7. Heap (brk) ─────────────────────────────────
+    // -- 7. Heap (brk) ---------------------------------
     hdr("7 Heap");
     const b0 = sys.brk(0);
     w("  break: ");
@@ -276,7 +246,7 @@ export fn _start() noreturn {
         res("brk", b1);
     }
 
-    // ── 8. Filesystem ─────────────────────────────────
+    // -- 8. Filesystem ---------------------------------
     hdr("8 FS");
     const fn_ = "/tmp/ks.txt";
     const fd = sys.fs_open(&fn_[0], fn_.len, sys.OpenFlags.WRITE_CREATE_TRUNCATE);
@@ -312,7 +282,7 @@ export fn _start() noreturn {
         res("readdir", dc);
     }
 
-    // ── 9. Device Graph ───────────────────────────────
+    // -- 9. Device Graph -------------------------------
     hdr("9 DevGraph");
     const dn = sys.device_graph_count();
     if (!lib.isError(dn)) {
@@ -349,7 +319,7 @@ export fn _start() noreturn {
         res("dev_count", dn);
     }
 
-    // ── 10. Cache Ops ─────────────────────────────────
+    // -- 10. Cache Ops ---------------------------------
     hdr("10 Cache");
     const cb0 = sys.brk(0);
     const cb1 = sys.brk(cb0 + 4096);
@@ -363,7 +333,7 @@ export fn _start() noreturn {
         _ = sys.brk(cb0);
     }
 
-    // ── 11. Barriers ──────────────────────────────────
+    // -- 11. Barriers ----------------------------------
     hdr("11 Barriers");
     barriers.dataMemoryBarrier();
     ok("DMB SY");
@@ -380,10 +350,10 @@ export fn _start() noreturn {
     lib.idle.sendEvent();
     ok("SEV");
 
-    // ── 12. Event Wait ────────────────────────────────
+    // -- 12. Event Wait --------------------------------
     hdr("12 WaitEvent");
     const ws = sys.get_time();
-    const wk = sys.wait_event(0, 0, 0, 1_000_000);
+    const wk = sys.wait_event(0, 0, 1_000_000);
     const we = sys.get_time() - ws;
     w("  reason=");
     switch (wk) {
@@ -399,7 +369,7 @@ export fn _start() noreturn {
     wn(we / 1000);
     w("us\n");
 
-    // ── 13. Error Utils ───────────────────────────────
+    // -- 13. Error Utils -------------------------------
     hdr("13 Errors");
     w("  isErr(0)=");
     w(if (lib.isError(0)) "T" else "F");
@@ -409,7 +379,7 @@ export fn _start() noreturn {
     w(if (lib.isError(lib.errors.ERROR_BASE)) "T" else "F");
     w("\n");
 
-    // ── Done ──────────────────────────────────────────
+    // -- Done ------------------------------------------
     hdr("DONE");
     const el = sys.get_time() - t0;
     w("  ");

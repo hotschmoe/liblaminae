@@ -1,5 +1,5 @@
 //------------------------------------------------------------------------------
-// HTTP Transport — T2 client over `lib/net_client/`
+// HTTP Transport -- T2 client over `lib/net_client/`
 //------------------------------------------------------------------------------
 //
 // The transport half of `lib/man/http.zig`. This module wires the parser to

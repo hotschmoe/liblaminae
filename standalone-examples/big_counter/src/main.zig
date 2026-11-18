@@ -1,5 +1,5 @@
 // Big Counter Demo for Laminae OS
-// Showcases syscalls: write, get_time, sleep, get_container_id, get_platform, yield
+// Showcases syscalls: write, get_time, sleep, get_cell_id, get_platform, yield
 
 const lib = @import("liblaminae");
 const sys = lib.syscalls;
@@ -57,18 +57,18 @@ fn writeBar(current: u64, total: u64, width: u64) void {
 }
 
 export fn _start() noreturn {
-    // ── Banner ──────────────────────────────
+    // -- Banner ------------------------------
     write("\n");
     write("+--------------------------------------+\n");
     write("|      BIG COUNTER - Laminae OS        |\n");
     write("|      Syscall Showcase Demo           |\n");
     write("+--------------------------------------+\n\n");
 
-    // ── System Info ─────────────────────────
+    // -- System Info -------------------------
     write(">> System Info\n");
 
-    const cid = sys.get_container_id();
-    write("   Container ID : ");
+    const cid = sys.get_cell_id();
+    write("   Cell ID : ");
     writeNum(cid);
     write("\n");
 
@@ -82,7 +82,7 @@ export fn _start() noreturn {
     writeNum(boot_time / 1_000_000);
     write(" ms\n\n");
 
-    // ── Counting Phase ──────────────────────
+    // -- Counting Phase ----------------------
     const max: u64 = 20;
     write(">> Counting to ");
     writeNum(max);
@@ -111,7 +111,7 @@ export fn _start() noreturn {
         }
     }
 
-    // ── Yield Test ──────────────────────────
+    // -- Yield Test --------------------------
     write("\n>> Yield test (5 yields)\n");
     var y: u64 = 0;
     const yt0 = sys.get_time();
@@ -123,7 +123,7 @@ export fn _start() noreturn {
     writeNum(yield_us);
     write(" us\n");
 
-    // ── Summary ─────────────────────────────
+    // -- Summary -----------------------------
     const total_ms = (sys.get_time() - t0) / 1_000_000;
     write("\n+--------------------------------------+\n");
     write("|  RESULTS                             |\n");

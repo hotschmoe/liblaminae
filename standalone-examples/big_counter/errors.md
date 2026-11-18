@@ -122,4 +122,4 @@ Done 0ms
 
 ------------- ANSWER
 
-Networking — yeah, the truncation you saw earlier (924/1146 bytes) is the bottleneck. Once that's solid, you can go back to the fuller demo with banners, elapsed timing per count, etc. The code itself is proven to work — it's just a matter of how many bytes can survive the transfer.
+Networking -- yeah, the truncation you saw earlier (924/1146 bytes) is the bottleneck. Once that's solid, you can go back to the fuller demo with banners, elapsed timing per count, etc. The code itself is proven to work -- it's just a matter of how many bytes can survive the transfer.

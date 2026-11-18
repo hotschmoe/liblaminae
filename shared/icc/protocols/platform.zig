@@ -1,25 +1,32 @@
 //------------------------------------------------------------------------------
-// Platform Container Protocol — Method specs for `lib/platform_client/`
+// Platform Cell Protocol -- Method specs for `lib/platform_client/`
 //------------------------------------------------------------------------------
 //
-// Single source of truth for the platform container's ICC message format
+// Single source of truth for the platform cell's ICC message format
 // (clock / power / reset / board-info ops in the 0x4000-0x4035 range).
 //
 // Closes the C8.12 follow-up: before this file, the same constants were
-// declared in three places — `lib/man/platform.zig`, `user/platforms/virt.zig`,
+// declared in three places -- `lib/man/platform.zig`, `user/platforms/virt.zig`,
 // and `src/shared/icc/schema.zig`'s metadata table. This module is now the
 // canonical source; both the client lib (`lib/platform_client/api.zig`) and
 // the server (`user/platforms/virt.zig`) import from here. The schema.zig
 // metadata table stays as descriptive registry-of-ranges (it's not the
 // authority on individual constants).
 //
+// Import-free by design (the_law/HARDLINE.md section 5), amended by L1.1
+// (the_law/adoption_plan.md) to allow exactly one leaf import:
+// `src/shared/icc/contract.zig`, itself import-free. It supplies the
+// CONTRACT_HASH computation below.
+//
 //------------------------------------------------------------------------------
 
-/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+const contract = @import("contract");
+
+/// Channel-message payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
 /// this module is import-free by design; lib/root.zig asserts the mirror.
 pub const PAYLOAD_SIZE = 248;
 
-/// Namespace name registered by the platform container at boot.
+/// Namespace name registered by the platform cell at boot.
 /// The client looks this up via `ns_lookup` to discover the peer ID.
 pub const NAMESPACE: []const u8 = "platform";
 
@@ -64,7 +71,7 @@ pub const PlatformMsgType = struct {
 //
 // Most platform ops follow an identical shape: send a u32 ID, get back a
 // "_OK" reply discriminated only by msg_type. The repetition is intentional
-// — each spec stays Zig-idiomatic and discoverable, and a future op with a
+// -- each spec stays Zig-idiomatic and discoverable, and a future op with a
 // different payload doesn't have to wrestle with a meta-template.
 //------------------------------------------------------------------------------
 
@@ -76,7 +83,7 @@ fn writeU32(payload: *[PAYLOAD_SIZE]u8, value: u32) void {
 pub const EnableClock = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.ENABLE_CLOCK;
     pub const REPLY_TYPE: u16 = PlatformMsgType.ENABLE_CLOCK_OK;
-    pub const Request = struct { clock_id: u32 };
+    pub const Request = extern struct { clock_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.clock_id);
@@ -89,7 +96,7 @@ pub const EnableClock = struct {
 pub const DisableClock = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.DISABLE_CLOCK;
     pub const REPLY_TYPE: u16 = PlatformMsgType.DISABLE_CLOCK_OK;
-    pub const Request = struct { clock_id: u32 };
+    pub const Request = extern struct { clock_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.clock_id);
@@ -102,7 +109,7 @@ pub const DisableClock = struct {
 pub const DeassertReset = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.DEASSERT_RESET;
     pub const REPLY_TYPE: u16 = PlatformMsgType.DEASSERT_RESET_OK;
-    pub const Request = struct { reset_id: u32 };
+    pub const Request = extern struct { reset_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.reset_id);
@@ -115,7 +122,7 @@ pub const DeassertReset = struct {
 pub const AssertReset = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.ASSERT_RESET;
     pub const REPLY_TYPE: u16 = PlatformMsgType.ASSERT_RESET_OK;
-    pub const Request = struct { reset_id: u32 };
+    pub const Request = extern struct { reset_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.reset_id);
@@ -128,7 +135,7 @@ pub const AssertReset = struct {
 pub const EnablePower = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.ENABLE_POWER;
     pub const REPLY_TYPE: u16 = PlatformMsgType.ENABLE_POWER_OK;
-    pub const Request = struct { power_id: u32 };
+    pub const Request = extern struct { power_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.power_id);
@@ -141,7 +148,7 @@ pub const EnablePower = struct {
 pub const DisablePower = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.DISABLE_POWER;
     pub const REPLY_TYPE: u16 = PlatformMsgType.DISABLE_POWER_OK;
-    pub const Request = struct { power_id: u32 };
+    pub const Request = extern struct { power_id: u32 };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         writeU32(p, req.power_id);
@@ -155,7 +162,7 @@ pub const GetMac = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.GET_MAC_ADDRESS;
     pub const REPLY_TYPE: u16 = PlatformMsgType.MAC_ADDRESS_OK;
     pub const Request = struct {};
-    pub const Reply = struct { mac: [6]u8 };
+    pub const Reply = extern struct { mac: [6]u8 };
     pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
     pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .mac = p[0..6].* };
@@ -166,7 +173,7 @@ pub const GetBoardSerial = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.GET_BOARD_SERIAL;
     pub const REPLY_TYPE: u16 = PlatformMsgType.BOARD_SERIAL_OK;
     pub const Request = struct {};
-    pub const Reply = struct { serial: u64 };
+    pub const Reply = extern struct { serial: u64 };
     pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
     pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .serial = @as(*align(1) const u64, @ptrCast(&p[0])).* };
@@ -177,7 +184,7 @@ pub const GetBoardRevision = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.GET_BOARD_REVISION;
     pub const REPLY_TYPE: u16 = PlatformMsgType.BOARD_REVISION_OK;
     pub const Request = struct {};
-    pub const Reply = struct { revision: u32 };
+    pub const Reply = extern struct { revision: u32 };
     pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
     pub fn deserialize(p: *const [PAYLOAD_SIZE]u8) Reply {
         return .{ .revision = @as(*align(1) const u32, @ptrCast(&p[0])).* };
@@ -187,7 +194,9 @@ pub const GetBoardRevision = struct {
 pub const SetClockRate = struct {
     pub const REQ_TYPE: u16 = PlatformMsgType.SET_CLOCK_RATE;
     pub const REPLY_TYPE: u16 = PlatformMsgType.SET_CLOCK_RATE_OK;
-    pub const Request = struct { clock_id: u32, rate_hz: u64 };
+    // rate_hz rides the wire unaligned at offset 4; align(1) makes the
+    // extern layout match the serializer instead of padding to offset 8.
+    pub const Request = extern struct { clock_id: u32, rate_hz: u64 align(1) };
     pub const Reply = struct {};
     pub fn serialize(req: Request, p: *[PAYLOAD_SIZE]u8) void {
         @as(*align(1) u32, @ptrCast(&p[0])).* = req.clock_id;
@@ -197,3 +206,40 @@ pub const SetClockRate = struct {
         return .{};
     }
 };
+
+//------------------------------------------------------------------------------
+// Contract hash (L1.1) -- wire-time refusal between mismatched trees.
+//------------------------------------------------------------------------------
+
+pub const CONTRACT_VERSION: u16 = 1;
+
+/// Method specs in wire order. Single source for both the CONTRACT_HASH walk
+/// and `tools/gen_docs.zig`'s contract reference (docs/api/contracts.md).
+pub const SPECS = .{
+    EnableClock,      DisableClock, DeassertReset, AssertReset,
+    EnablePower,      DisablePower, GetMac,        GetBoardSerial,
+    GetBoardRevision, SetClockRate,
+};
+
+pub const CONTRACT_HASH: u64 = contract.hashSpecs(SPECS, NAMESPACE, CONTRACT_VERSION);
+
+// The contract hash and gen_docs derive field offsets from the structs via
+// @offsetOf while serialize()/deserialize() hand-write byte offsets. The
+// structs are `extern` so their layout is defined, and these asserts pin the
+// two views together -- drift is a compile error, not a doc lie.
+comptime {
+    if (@offsetOf(EnableClock.Request, "clock_id") != 0 or
+        @offsetOf(DisableClock.Request, "clock_id") != 0 or
+        @offsetOf(DeassertReset.Request, "reset_id") != 0 or
+        @offsetOf(AssertReset.Request, "reset_id") != 0 or
+        @offsetOf(EnablePower.Request, "power_id") != 0 or
+        @offsetOf(DisablePower.Request, "power_id") != 0)
+        @compileError("platform: scalar request layout drifted from serialize()");
+    if (@offsetOf(SetClockRate.Request, "clock_id") != 0 or
+        @offsetOf(SetClockRate.Request, "rate_hz") != 4)
+        @compileError("platform: SetClockRate.Request layout drifted from serialize()");
+    if (@offsetOf(GetMac.Reply, "mac") != 0 or
+        @offsetOf(GetBoardSerial.Reply, "serial") != 0 or
+        @offsetOf(GetBoardRevision.Reply, "revision") != 0)
+        @compileError("platform: reply layout drifted from deserialize()");
+}

@@ -3,7 +3,7 @@
 //
 // Composes from generic SHM primitives (lib/shared/shm.zig) to provide
 // a high-throughput bidirectional path between the network stack and
-// application containers.
+// application cells.
 //
 // Architecture (post-C8.17 split):
 //   +--------+                                       +--------+

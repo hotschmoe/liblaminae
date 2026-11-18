@@ -1,19 +1,19 @@
 //------------------------------------------------------------------------------
-// Platform Table - Single Source of Truth for Platform Containers
+// Platform Table - Single Source of Truth for Platform Cells
 //------------------------------------------------------------------------------
-// Minimal table mapping DTB root compatible strings to platform container
-// binaries. Platform containers self-discover their hardware via DTB probing.
+// Minimal table mapping DTB root compatible strings to platform cell
+// binaries. Platform cells self-discover their hardware via DTB probing.
 //
 // This table intentionally contains ONLY:
-//   - name: Container binary name
+//   - name: Cell binary name
 //   - compatible: DTB root compatible string
 //   - namespace: Service namespace for ns_register/ns_lookup
 //
 // Platform internals (mailbox discovery, clock IDs, power domains) stay
-// inside each platform container. This keeps the central table minimal.
+// inside each platform cell. This keeps the central table minimal.
 //
 // Usage:
-//   - lamina.zig: Lookup platform by DTB root compatible, spawn container
+//   - lamina.zig: Lookup platform by DTB root compatible, spawn cell
 //   - Drivers: ns_lookup("platform.*") to find active platform
 //   - gen_docs: Generate platform documentation
 //
@@ -30,13 +30,13 @@ const std = @import("std");
 //------------------------------------------------------------------------------
 
 pub const PlatformEntry = struct {
-    /// Container binary name (used for spawn lookup)
+    /// Cell binary name (used for spawn lookup)
     name: []const u8,
 
     /// DTB root compatible string (matched against root "/" node)
     compatible: []const u8,
 
-    /// Service namespace (platform containers register as this)
+    /// Service namespace (platform cells register as this)
     namespace: []const u8,
 
     /// Human-readable description
@@ -57,7 +57,7 @@ pub const table = [_]PlatformEntry{
     },
 
     // Minisforum MS-R1 (CIX CP8180) - SCMI/ACPI for clock/power
-    // Scaffold container; real SCMI dispatch lands in Phase 3.
+    // Scaffold cell; real SCMI dispatch lands in Phase 3.
     .{
         .name = "ms_r1",
         .compatible = "cix,cp8180",

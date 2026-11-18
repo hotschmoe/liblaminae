@@ -2,8 +2,8 @@
 // Network Stack Protocol Specification
 //
 // This defines the contract between:
-//   - Network Stack Containers (zmoltcp, or any replacement)
-//   - Application Containers (net_test, shell, browsers, etc.)
+//   - Network Stack Cells (zmoltcp, or any replacement)
+//   - Application Cells (net_test, shell, browsers, etc.)
 //
 // IMPLEMENTERS: If you're building a network stack, implement all REQUIRED
 // message handlers. OPTIONAL handlers should return ErrorCode.NOT_SUPPORTED.
@@ -13,16 +13,33 @@
 //
 // DESIGN PRINCIPLE: Abstract commands (PING_GATEWAY, TEST_DNS) let consumers
 // express intent without knowing network topology. The stack owns all config.
+//
+// Import-free by design (the_law/HARDLINE.md section 5), amended by L1.1
+// (the_law/adoption_plan.md) to allow exactly one leaf import beyond `std`:
+// `src/shared/icc/contract.zig`, itself import-free. It supplies the
+// CONTRACT_HASH computation near the bottom of this file (the "Contract
+// hash" section wraps the existing Request/Result struct pairs in
+// Method-spec-shaped types purely for the hash walk -- the wire encoding
+// and the `net_client`/zmoltcp call sites are unchanged). BH4 (2026-07-16)
+// converted those Request/Result structs to `extern` so their layout IS
+// the wire layout; the two replies with compact-unaligned integers declare
+// a separate `WireReply` extern struct hashed in their place.
 //------------------------------------------------------------------------------
 
 const std = @import("std");
+const contract = @import("contract");
 
-/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+/// Channel-message payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
 /// this module is import-free by design; lib/root.zig asserts the mirror.
 pub const PAYLOAD_SIZE = 248;
 
 /// Protocol version - bump on breaking changes
 pub const PROTOCOL_VERSION: u16 = 1;
+
+/// Namespace name registered by the network stack at boot (`lib/net_client/
+/// api.zig`'s `NAMESPACE`; duplicated here as the CONTRACT_HASH descriptor
+/// input since this module predates the client/protocol split).
+pub const NAMESPACE: []const u8 = "net.stack";
 
 //------------------------------------------------------------------------------
 // Serialization Helpers
@@ -139,7 +156,7 @@ pub const MsgType = struct {
 
     /// Listen response
     /// Direction: stack -> app
-    /// Payload: GenericResult
+    /// Payload: ListenResult
     pub const LISTEN_RESULT: u16 = 0x200B;
 
     /// Accept connection
@@ -440,7 +457,7 @@ pub const MAX_HOSTNAME_LEN: usize = 240;
 //------------------------------------------------------------------------------
 // Payload Structures
 //
-// Pure Zig structs - C containers handle ABI translation internally.
+// Pure Zig structs - C cells handle ABI translation internally.
 // All multi-byte integers are native endian unless noted.
 // IPv4 addresses are network byte order (big-endian).
 //------------------------------------------------------------------------------
@@ -453,7 +470,7 @@ pub const Ipv4 = u32;
 
 // --- Socket Operations ---
 
-pub const ConnectRequest = struct {
+pub const ConnectRequest = extern struct {
     ip: Ipv4,
     port: u16,
     protocol: Protocol,
@@ -504,7 +521,95 @@ pub const ConnectResult = struct {
     }
 };
 
-pub const SendRequest = struct {
+/// LISTEN: open `backlog` passive sockets on `port` (any local address).
+/// zmoltcp has no separate accept-socket -- each listener transitions in
+/// place to established; ACCEPT harvests established ones and the stack
+/// re-arms a fresh listener to keep the backlog depth.
+pub const ListenRequest = extern struct {
+    port: u16,
+    backlog: u16,
+
+    pub fn serialize(self: ListenRequest, payload: *[PAYLOAD_SIZE]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.port);
+        writeU16(payload, 2, self.backlog);
+    }
+
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ListenRequest {
+        return .{
+            .port = readU16(payload, 0),
+            .backlog = readU16(payload, 2),
+        };
+    }
+};
+
+pub const ListenResult = extern struct {
+    port: u16,
+    error_code: u16,
+
+    pub fn serialize(self: ListenResult, payload: *[PAYLOAD_SIZE]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.port);
+        writeU16(payload, 2, self.error_code);
+    }
+
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) ListenResult {
+        return .{
+            .port = readU16(payload, 0),
+            .error_code = readU16(payload, 2),
+        };
+    }
+};
+
+/// ACCEPT: harvest one established connection from the caller's listener
+/// group on `port`. Result WOULD_BLOCK when none is ready -- callers poll.
+pub const AcceptRequest = extern struct {
+    port: u16,
+
+    pub fn serialize(self: AcceptRequest, payload: *[PAYLOAD_SIZE]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.port);
+    }
+
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) AcceptRequest {
+        return .{ .port = readU16(payload, 0) };
+    }
+};
+
+/// ACCEPT_RESULT: mirrors ConnectResult (same per-socket SHM handle
+/// contract, same client attach + SOCKET_SHM_ACCEPT dance) plus the remote
+/// endpoint identity.
+pub const AcceptResult = struct {
+    socket: Socket,
+    error_code: u16,
+    remote_ip: Ipv4,
+    remote_port: u16,
+    recv_shm_handle: u64,
+    send_shm_handle: u64,
+
+    pub fn serialize(self: AcceptResult, payload: *[PAYLOAD_SIZE]u8) void {
+        @memset(payload, 0);
+        writeU16(payload, 0, self.socket);
+        writeU16(payload, 2, self.error_code);
+        writeU32(payload, 4, self.remote_ip);
+        writeU16(payload, 8, self.remote_port);
+        writeU64(payload, 10, self.recv_shm_handle);
+        writeU64(payload, 18, self.send_shm_handle);
+    }
+
+    pub fn deserialize(payload: *const [PAYLOAD_SIZE]u8) AcceptResult {
+        return .{
+            .socket = readU16(payload, 0),
+            .error_code = readU16(payload, 2),
+            .remote_ip = readU32(payload, 4),
+            .remote_port = readU16(payload, 8),
+            .recv_shm_handle = readU64(payload, 10),
+            .send_shm_handle = readU64(payload, 18),
+        };
+    }
+};
+
+pub const SendRequest = extern struct {
     socket: Socket,
     len: u16,
 
@@ -529,7 +634,7 @@ pub const SendRequest = struct {
     }
 };
 
-pub const SendResult = struct {
+pub const SendResult = extern struct {
     socket: Socket,
     sent: u16,
     error_code: u16,
@@ -550,7 +655,7 @@ pub const SendResult = struct {
     }
 };
 
-pub const RecvRequest = struct {
+pub const RecvRequest = extern struct {
     socket: Socket,
     max_len: u16,
     timeout_ms: u16,
@@ -571,7 +676,7 @@ pub const RecvRequest = struct {
     }
 };
 
-pub const RecvResult = struct {
+pub const RecvResult = extern struct {
     socket: Socket,
     len: u16,
     error_code: u16,
@@ -599,7 +704,7 @@ pub const RecvResult = struct {
     }
 };
 
-pub const CloseRequest = struct {
+pub const CloseRequest = extern struct {
     socket: Socket,
 
     pub fn serialize(self: CloseRequest, payload: *[PAYLOAD_SIZE]u8) void {
@@ -614,7 +719,7 @@ pub const CloseRequest = struct {
 
 // --- DNS Operations ---
 
-pub const DnsRequest = struct {
+pub const DnsRequest = extern struct {
     hostname_len: u16,
 
     pub fn serialize(self: DnsRequest, payload: *[PAYLOAD_SIZE]u8, hostname: []const u8) void {
@@ -637,7 +742,7 @@ pub const DnsRequest = struct {
     }
 };
 
-pub const DnsResult = struct {
+pub const DnsResult = extern struct {
     error_code: u16,
     addr_count: u16,
     addr: Ipv4,
@@ -660,7 +765,7 @@ pub const DnsResult = struct {
 
 // --- Ping Operations ---
 
-pub const PingRequest = struct {
+pub const PingRequest = extern struct {
     ip: Ipv4,
     seq: u16,
     timeout_ms: u16,
@@ -681,7 +786,7 @@ pub const PingRequest = struct {
     }
 };
 
-pub const PingResult = struct {
+pub const PingResult = extern struct {
     error_code: u16,
     seq: u16,
     rtt_us: u32,
@@ -709,7 +814,7 @@ pub const PingResult = struct {
 
 /// Request to ping the stack's configured gateway
 /// Behavior: Stack pings its own gateway IP, returns same result as PING
-pub const PingGatewayRequest = struct {
+pub const PingGatewayRequest = extern struct {
     seq: u16,
     timeout_ms: u16,
 
@@ -729,7 +834,7 @@ pub const PingGatewayRequest = struct {
 
 /// Request to test DNS server connectivity
 /// Behavior: Stack sends test query to its DNS server
-pub const TestDnsRequest = struct {
+pub const TestDnsRequest = extern struct {
     timeout_ms: u16,
 
     pub fn serialize(self: TestDnsRequest, payload: *[PAYLOAD_SIZE]u8) void {
@@ -765,7 +870,7 @@ pub const TestDnsResult = struct {
 };
 
 /// Request for network configuration (escape hatch)
-pub const GetConfigRequest = struct {
+pub const GetConfigRequest = extern struct {
     pub fn serialize(_: GetConfigRequest, payload: *[PAYLOAD_SIZE]u8) void {
         @memset(payload, 0);
     }
@@ -776,7 +881,7 @@ pub const GetConfigRequest = struct {
 };
 
 /// Network configuration response
-pub const ConfigResult = struct {
+pub const ConfigResult = extern struct {
     error_code: u16,
     ip: Ipv4,
     subnet_mask: Ipv4,
@@ -810,7 +915,7 @@ pub const ConfigResult = struct {
 };
 
 /// Request for general connectivity test
-pub const TestConnectivityRequest = struct {
+pub const TestConnectivityRequest = extern struct {
     timeout_ms: u16,
 
     pub fn serialize(self: TestConnectivityRequest, payload: *[PAYLOAD_SIZE]u8) void {
@@ -824,7 +929,7 @@ pub const TestConnectivityRequest = struct {
 };
 
 /// Connectivity test result
-pub const TestConnectivityResult = struct {
+pub const TestConnectivityResult = extern struct {
     error_code: u16,
     link_up: bool,
     gateway_reachable: bool,
@@ -894,3 +999,187 @@ pub const ShmDataReadyPayload = struct {
         };
     }
 };
+
+//------------------------------------------------------------------------------
+// Contract hash (L1.1) -- wire-time refusal between mismatched trees.
+//
+// This protocol predates the `lib/man/rpc.zig` Method-spec convention (its
+// serialize/deserialize signatures vary per-op -- some take an extra `data`
+// slice, some don't -- so `net_client`/zmoltcp keep calling the existing
+// Request/Result types directly). The wrappers below exist ONLY to give
+// `contract.hashSpecs` a uniform REQ_TYPE/REPLY_TYPE/Request/Reply shape to
+// walk; they carry no serialize/deserialize logic of their own and nothing
+// else references them. Per BH4 the walked types describe WIRE bytes: the
+// Request/Result structs are `extern` (asserts below pin their @offsetOf to
+// the hand serializers), and Connect/TestDns -- whose replies pack u64/u32
+// at unaligned wire offsets -- declare `align(1)` WireReply extern structs
+// hashed in place of their Reply.
+//------------------------------------------------------------------------------
+
+const Connect = struct {
+    pub const REQ_TYPE: u16 = MsgType.CONNECT;
+    pub const REPLY_TYPE: u16 = MsgType.CONNECT_RESULT;
+    pub const Request = ConnectRequest;
+    pub const Reply = ConnectResult;
+
+    /// Wire layout of ConnectResult.serialize(): the two u64 SHM handles sit
+    /// at compact offsets 4/12 (not the naturally-aligned 8/16 an extern
+    /// ConnectResult would report), so `align(1)` pins them to the bytes.
+    pub const WireReply = extern struct {
+        socket: u16,
+        error_code: u16,
+        recv_shm_handle: u64 align(1),
+        send_shm_handle: u64 align(1),
+    };
+};
+
+const Send = struct {
+    pub const REQ_TYPE: u16 = MsgType.SEND;
+    pub const REPLY_TYPE: u16 = MsgType.SEND_RESULT;
+    pub const Request = SendRequest;
+    pub const Reply = SendResult;
+};
+
+const Recv = struct {
+    pub const REQ_TYPE: u16 = MsgType.RECV;
+    pub const REPLY_TYPE: u16 = MsgType.RECV_RESULT;
+    pub const Request = RecvRequest;
+    pub const Reply = RecvResult;
+};
+
+const Close = struct {
+    pub const REQ_TYPE: u16 = MsgType.CLOSE;
+    pub const Request = CloseRequest;
+};
+
+const DnsResolve = struct {
+    pub const REQ_TYPE: u16 = MsgType.DNS_RESOLVE;
+    pub const REPLY_TYPE: u16 = MsgType.DNS_RESULT;
+    pub const Request = DnsRequest;
+    pub const Reply = DnsResult;
+};
+
+const Ping = struct {
+    pub const REQ_TYPE: u16 = MsgType.PING;
+    pub const REPLY_TYPE: u16 = MsgType.PING_RESULT;
+    pub const Request = PingRequest;
+    pub const Reply = PingResult;
+};
+
+const PingGateway = struct {
+    pub const REQ_TYPE: u16 = MsgType.PING_GATEWAY;
+    pub const REPLY_TYPE: u16 = MsgType.PING_GATEWAY_RESULT;
+    pub const Request = PingGatewayRequest;
+    pub const Reply = PingResult;
+};
+
+const TestDns = struct {
+    pub const REQ_TYPE: u16 = MsgType.TEST_DNS;
+    pub const REPLY_TYPE: u16 = MsgType.TEST_DNS_RESULT;
+    pub const Request = TestDnsRequest;
+    pub const Reply = TestDnsResult;
+
+    /// Wire layout of TestDnsResult.serialize(): dns_server/rtt_us are packed
+    /// at compact offsets 2/6 (not the aligned 4/8 an extern TestDnsResult
+    /// would report), so `align(1)` pins them to the bytes.
+    pub const WireReply = extern struct {
+        error_code: u16,
+        dns_server: u32 align(1),
+        rtt_us: u32 align(1),
+    };
+};
+
+const GetConfig = struct {
+    pub const REQ_TYPE: u16 = MsgType.GET_CONFIG;
+    pub const REPLY_TYPE: u16 = MsgType.CONFIG_RESULT;
+    pub const Request = GetConfigRequest;
+    pub const Reply = ConfigResult;
+};
+
+const TestConnectivity = struct {
+    pub const REQ_TYPE: u16 = MsgType.TEST_CONNECTIVITY;
+    pub const REPLY_TYPE: u16 = MsgType.TEST_CONNECTIVITY_RESULT;
+    pub const Request = TestConnectivityRequest;
+    pub const Reply = TestConnectivityResult;
+};
+
+pub const CONTRACT_VERSION: u16 = PROTOCOL_VERSION;
+
+/// Method specs in wire order. Single source for both the CONTRACT_HASH walk
+/// and `tools/gen_docs.zig`'s contract reference (docs/api/contracts.md).
+pub const SPECS = .{ Connect, Send, Recv, Close, DnsResolve, Ping, PingGateway, TestDns, GetConfig, TestConnectivity };
+
+pub const CONTRACT_HASH: u64 = contract.hashSpecs(SPECS, NAMESPACE, CONTRACT_VERSION);
+
+// The contract hash and gen_docs derive field offsets via @offsetOf while
+// serialize()/deserialize() hand-write byte offsets. The hashed structs are
+// `extern` (or the Connect/TestDns WireReply overrides for the compact-
+// unaligned replies) so their layout is defined; these asserts pin the two
+// views together -- offset drift is a compile error, not a doc lie (BH4).
+comptime {
+    if (@offsetOf(ConnectRequest, "ip") != 0 or
+        @offsetOf(ConnectRequest, "port") != 4 or
+        @offsetOf(ConnectRequest, "protocol") != 6)
+        @compileError("net: ConnectRequest layout drifted from serialize()");
+    if (@offsetOf(Connect.WireReply, "socket") != 0 or
+        @offsetOf(Connect.WireReply, "error_code") != 2 or
+        @offsetOf(Connect.WireReply, "recv_shm_handle") != 4 or
+        @offsetOf(Connect.WireReply, "send_shm_handle") != 12)
+        @compileError("net: Connect.WireReply layout drifted from ConnectResult.serialize()");
+    if (@offsetOf(SendRequest, "socket") != 0 or
+        @offsetOf(SendRequest, "len") != 2)
+        @compileError("net: SendRequest layout drifted from serialize()");
+    if (@offsetOf(SendResult, "socket") != 0 or
+        @offsetOf(SendResult, "sent") != 2 or
+        @offsetOf(SendResult, "error_code") != 4)
+        @compileError("net: SendResult layout drifted from serialize()");
+    if (@offsetOf(RecvRequest, "socket") != 0 or
+        @offsetOf(RecvRequest, "max_len") != 2 or
+        @offsetOf(RecvRequest, "timeout_ms") != 4)
+        @compileError("net: RecvRequest layout drifted from serialize()");
+    if (@offsetOf(RecvResult, "socket") != 0 or
+        @offsetOf(RecvResult, "len") != 2 or
+        @offsetOf(RecvResult, "error_code") != 4)
+        @compileError("net: RecvResult layout drifted from serialize()");
+    if (@offsetOf(CloseRequest, "socket") != 0)
+        @compileError("net: CloseRequest layout drifted from serialize()");
+    if (@offsetOf(DnsRequest, "hostname_len") != 0)
+        @compileError("net: DnsRequest layout drifted from serialize()");
+    if (@offsetOf(DnsResult, "error_code") != 0 or
+        @offsetOf(DnsResult, "addr_count") != 2 or
+        @offsetOf(DnsResult, "addr") != 4)
+        @compileError("net: DnsResult layout drifted from serialize()");
+    if (@offsetOf(PingRequest, "ip") != 0 or
+        @offsetOf(PingRequest, "seq") != 4 or
+        @offsetOf(PingRequest, "timeout_ms") != 6)
+        @compileError("net: PingRequest layout drifted from serialize()");
+    if (@offsetOf(PingResult, "error_code") != 0 or
+        @offsetOf(PingResult, "seq") != 2 or
+        @offsetOf(PingResult, "rtt_us") != 4 or
+        @offsetOf(PingResult, "ttl") != 8)
+        @compileError("net: PingResult layout drifted from serialize()");
+    if (@offsetOf(PingGatewayRequest, "seq") != 0 or
+        @offsetOf(PingGatewayRequest, "timeout_ms") != 2)
+        @compileError("net: PingGatewayRequest layout drifted from serialize()");
+    if (@offsetOf(TestDnsRequest, "timeout_ms") != 0)
+        @compileError("net: TestDnsRequest layout drifted from serialize()");
+    if (@offsetOf(TestDns.WireReply, "error_code") != 0 or
+        @offsetOf(TestDns.WireReply, "dns_server") != 2 or
+        @offsetOf(TestDns.WireReply, "rtt_us") != 6)
+        @compileError("net: TestDns.WireReply layout drifted from TestDnsResult.serialize()");
+    if (@offsetOf(ConfigResult, "error_code") != 0 or
+        @offsetOf(ConfigResult, "ip") != 4 or
+        @offsetOf(ConfigResult, "subnet_mask") != 8 or
+        @offsetOf(ConfigResult, "gateway") != 12 or
+        @offsetOf(ConfigResult, "dns_primary") != 16 or
+        @offsetOf(ConfigResult, "dns_secondary") != 20 or
+        @offsetOf(ConfigResult, "link_up") != 24)
+        @compileError("net: ConfigResult layout drifted from serialize()");
+    if (@offsetOf(TestConnectivityRequest, "timeout_ms") != 0)
+        @compileError("net: TestConnectivityRequest layout drifted from serialize()");
+    if (@offsetOf(TestConnectivityResult, "error_code") != 0 or
+        @offsetOf(TestConnectivityResult, "link_up") != 2 or
+        @offsetOf(TestConnectivityResult, "gateway_reachable") != 3 or
+        @offsetOf(TestConnectivityResult, "dns_reachable") != 4)
+        @compileError("net: TestConnectivityResult layout drifted from serialize()");
+}

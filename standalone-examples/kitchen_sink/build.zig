@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = true, // Strip debug info — critical for size
+            .strip = true, // Strip debug info -- critical for size
         }),
     });
 

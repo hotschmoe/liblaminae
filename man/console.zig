@@ -1,9 +1,9 @@
 //------------------------------------------------------------------------------
 // User-Space Console API (Level 2 TTY)
 //------------------------------------------------------------------------------
-// Zero-syscall console output for containers.
+// Zero-syscall console output for cells.
 //
-// Each container has a 64KB console ring buffer mapped at uva_layout.console_ring.base.
+// Each cell has a 64KB console ring buffer mapped at uva_layout.console_ring.base.
 // The kernel reads from this buffer and routes output to UART.
 //
 // Usage:
@@ -13,13 +13,18 @@
 //
 // Benefits:
 // - Zero syscall overhead for output
-// - ASID-isolated (each container has its own ring)
+// - ASID-isolated (each cell has its own ring)
 // - Kernel polls and drains to UART
 //
-// TODO: Research ring buffer for stdin (currently syscall-based)
+// Stdin is symmetric: each cell also has a 4KB stdin ring mapped at
+// uva_layout.console_in.base. The kernel PL011 RX IRQ writes received bytes
+// into it; the cell drains them here with zero syscalls (`readByte`). The
+// only syscall is the blocking-wait slow path (`waitReadable`, syscall 109
+// with fd=0), taken when the ring is empty and the reader wants to block.
 //------------------------------------------------------------------------------
 
 const std = @import("std");
+const sys = @import("../gen/syscalls.zig");
 const shared_fmt = @import("../shared/fmt.zig");
 const uva_layout = @import("../shared/uva_layout.zig");
 
@@ -79,20 +84,45 @@ pub fn ConsoleRing(comptime capacity: usize) type {
 
             return written;
         }
+
+        /// Bytes available to read (consumer API).
+        pub fn readable(self: *const Self) usize {
+            const w = self.write_idx;
+            const r = self.read_idx;
+            return if (w >= r) w - r else capacity - r + w;
+        }
+
+        /// Pop one byte (consumer API). Returns null if empty.
+        pub fn pop1(self: *Self) ?u8 {
+            if (self.read_idx == self.write_idx) return null;
+            const c = self.data[self.read_idx];
+            self.read_idx = @intCast((self.read_idx + 1) % capacity);
+            return c;
+        }
     };
 }
 
-/// Container console type (64KB - 64B header = 65472B data)
-pub const ContainerConsole = ConsoleRing(64 * 1024 - 64);
+/// Cell console type (64KB - 64B header = 65472B data)
+pub const CellConsole = ConsoleRing(64 * 1024 - 64);
+
+/// Cell stdin type (4KB - 64B header = 4032B data). Producer is the kernel
+/// RX IRQ; this cell is the consumer.
+pub const CellStdin = ConsoleRing(4 * 1024 - 64);
 
 //------------------------------------------------------------------------------
 // Console Ring Pointer
 //------------------------------------------------------------------------------
 
-/// Get pointer to this container's console ring.
+/// Get pointer to this cell's console ring.
 /// Uses `uva_layout.console_ring.base` -- single source of truth.
-fn getConsole() *ContainerConsole {
-    return uva_layout.console_ring.base.toPtr(*ContainerConsole);
+fn getConsole() *CellConsole {
+    return uva_layout.console_ring.base.toPtr(*CellConsole);
+}
+
+/// Get pointer to this cell's stdin ring.
+/// Uses `uva_layout.console_in.base` -- single source of truth.
+fn getStdin() *CellStdin {
+    return uva_layout.console_in.base.toPtr(*CellStdin);
 }
 
 //------------------------------------------------------------------------------
@@ -138,6 +168,90 @@ pub fn printHex(n: u64) void {
     var buf: [16]u8 = undefined;
     print("0x");
     print(shared_fmt.hex(n, .lower, &buf));
+}
+
+//------------------------------------------------------------------------------
+// Stdin API (zero-syscall input)
+//------------------------------------------------------------------------------
+
+/// Number of bytes waiting in the stdin ring (zero syscall).
+pub fn stdinReadable() usize {
+    return getStdin().readable();
+}
+
+/// Direct pointer to this cell's stdin ring. The kernel RX IRQ is the normal
+/// producer; exposed for loopback / self-injection (e.g. tests) where the
+/// cell writes its own input via the producer API.
+pub fn stdinRing() *CellStdin {
+    return getStdin();
+}
+
+/// True if the stdin ring has dropped bytes due to overflow (reader too slow).
+pub fn hasStdinOverflowed() bool {
+    return getStdin().flags.overflow;
+}
+
+/// Total stdin bytes dropped so far (drop-oldest overflow policy).
+pub fn stdinOverflowCount() u32 {
+    return getStdin().overflow_count;
+}
+
+/// Acknowledge a stdin overflow (clears the flag; the count keeps running).
+pub fn clearStdinOverflow() void {
+    getStdin().flags.overflow = false;
+}
+
+/// Pop one byte from the stdin ring without blocking (zero syscall).
+/// Returns null if no input is currently buffered.
+pub fn readByte() ?u8 {
+    return getStdin().pop1();
+}
+
+/// Non-blocking alias of `readByte`.
+pub fn pollByte() ?u8 {
+    return readByte();
+}
+
+/// Claim foreground and fold any pre-foreground / early-boot bytes into the
+/// stdin ring, without blocking. Returns the ring's readable byte count.
+/// Use in a poll loop before `pollByte`, e.g. to keep receiving keystrokes
+/// while another cell might contend for foreground.
+pub fn stdinPoll() u64 {
+    var dummy: u8 = 0;
+    return sys.read(0, &dummy, 1, 1, 0); // flags=1 -> non-blocking
+}
+
+/// Block until at least one byte is readable in the stdin ring, or the
+/// deadline expires (timeout_ns == 0 blocks indefinitely). This is the only
+/// syscall on the stdin path (syscall 109, fd=0); it copies nothing -- drain
+/// the ring with `readByte` afterwards. Returns the readable byte count
+/// (0 on timeout).
+pub fn waitReadable(timeout_ns: u64) u64 {
+    var dummy: u8 = 0;
+    return sys.read(0, &dummy, 1, 0, timeout_ns);
+}
+
+/// Read one byte, blocking until input arrives. Drains the ring first
+/// (zero syscall) and only parks (via `waitReadable`) when it is empty.
+pub fn readByteBlocking() u8 {
+    while (true) {
+        if (readByte()) |c| return c;
+        _ = waitReadable(0);
+    }
+}
+
+/// Read a line into `buf`, blocking until a newline (LF or CR) or `buf` is
+/// full. The terminator is consumed but not stored. Returns the line length.
+/// Zero-syscall while the ring has bytes; parks only when it drains empty.
+pub fn readLine(buf: []u8) usize {
+    var n: usize = 0;
+    while (n < buf.len) {
+        const c = readByteBlocking();
+        if (c == '\n' or c == '\r') break;
+        buf[n] = c;
+        n += 1;
+    }
+    return n;
 }
 
 //------------------------------------------------------------------------------

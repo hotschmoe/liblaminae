@@ -10,7 +10,7 @@ pub const Syscall = enum(u64) {
     get_time = 103,
     spawn = 104,
     kill = 105,
-    get_container_id = 106,
+    get_cell_id = 106,
     sleep = 107,
     wait_for_exit = 108,
     read = 109,
@@ -18,27 +18,32 @@ pub const Syscall = enum(u64) {
     wait_event = 111,
     console_ctl = 112,
     get_crash_telemetry = 113,
-    container_list = 114,
-    container_log_read = 115,
+    cell_list = 114,
+    cell_log_read = 115,
     get_capabilities = 116,
     mem_info = 117,
-    container_stats = 118,
+    cell_stats = 118,
     set_memory_limit = 119,
-    container_counter_snapshot = 122,
+    cell_counter_snapshot = 122,
     set_affinity = 127,
-    icc_send = 120,
-    icc_recv = 121,
-    icc_peek = 123,
-    icc_recv_typed = 124,
+    lease_snapshot = 128,
+    cell_history = 129,
+    cell_capsule = 155,
     ring_arm = 125,
     ring_wake = 126,
-    ns_register = 130,
-    ns_lookup = 131,
-    ns_wait = 132,
+    chan_create = 133,
+    chan_grant = 134,
+    chan_wire = 135,
+    chan_send = 136,
+    chan_recv = 137,
+    chan_close = 138,
+    chan_snapshot = 139,
+    chan_deliver = 154,
     map_create = 140,
     map_attach = 141,
     map_detach = 142,
-    map_handle = 147,
+    map_bind = 149,
+    map_size = 148,
     mmap = 144,
     munmap = 145,
     mprotect = 146,
@@ -51,7 +56,6 @@ pub const Syscall = enum(u64) {
     irq_register = 161,
     irq_ack = 162,
     alloc_dma = 163,
-    get_device_list = 164,
     get_assigned_device = 165,
     device_graph_count = 166,
     device_graph_get_node = 167,
@@ -78,8 +82,10 @@ pub const Syscall = enum(u64) {
     pwrite = 236,
 };
 
-pub const Message = extern struct { source_id: u16, msg_type: u16, flags: u32, payload: [PAYLOAD_SIZE]u8, pub const PAYLOAD_SIZE = 248; };
+pub const Message = extern struct { source_id: u16, source_gen: u16, msg_type: u16, flags: u16, payload: [PAYLOAD_SIZE]u8, pub const PAYLOAD_SIZE = 248; pub fn sourceIdentity(self: *const Message) u32 { return @as(u32, self.source_id) | (@as(u32, self.source_gen) << 16); } };
 pub const DeviceInfo = extern struct { id: u32, mmio_base: u64, mmio_size: u64, irq: u32, irq2: u32, compatible: [64]u8 };
+pub const MAX_SPAWN_GRANTS = 8;
+pub const SpawnAux = extern struct { has_device: u32 = 0, granted_count: u32 = 0, granted_endpoints: [MAX_SPAWN_GRANTS]u32 = @splat(0), device_info: DeviceInfo = undefined };
 pub const RegEntry = extern struct { phys_addr: u64, size: u64 };
 pub const DeviceGraphNode = extern struct {
     id: u32,
@@ -111,17 +117,42 @@ pub const DeviceDependencies = extern struct {
     phy_count: u8,
     _padding: [4]u8,
 };
-pub const ContainerInfo = extern struct {
+pub const CellInfo = extern struct {
     id: u16,
-    container_type: u8,
+    cell_type: u8,
     state: u8,
     name_len: u8,
-    _pad: [3]u8,
+    _pad: u8,
+    generation: u16,
     name: [32]u8,
     start_time_ns: u64,
     exit_code: u64,
 
-    pub fn getName(self: *const ContainerInfo) []const u8 {
+    pub fn getName(self: *const CellInfo) []const u8 {
+        return self.name[0..self.name_len];
+    }
+};
+/// Durable post-exit cell record returned by sys_cell_history.
+pub const CellExitRecord = extern struct {
+    /// Monotonic 1-based capture index (cell_history paging cursor).
+    index: u32,
+    /// Generation-qualified identity: raw | (generation << 16).
+    id_packed: u32,
+    cell_type: u8,
+    /// 0 = self-exit, 1 = killed, 2 = crashed.
+    exit_kind: u8,
+    name_len: u8,
+    _pad: u8,
+    /// Retained console-tail length (read bytes via cell_log_read).
+    log_len: u32,
+    /// Total bytes the cell ever wrote to stdout.
+    log_total: u32,
+    name: [32]u8,
+    exit_code: u64,
+    start_time_ns: u64,
+    exit_time_ns: u64,
+
+    pub fn getName(self: *const CellExitRecord) []const u8 {
         return self.name[0..self.name_len];
     }
 };
@@ -132,12 +163,12 @@ pub const MemInfo = extern struct {
     page_size: u32,
     pool_count: u8,
     _pad: [3]u8,
-    container_count: u32,
+    cell_count: u32,
     _pad2: [4]u8,
 };
-pub const ContainerStats = extern struct {
+pub const CellStats = extern struct {
     id: u16,
-    container_type: u8,
+    cell_type: u8,
     state: u8,
     name_len: u8,
     _pad: [3]u8,
@@ -151,35 +182,50 @@ pub const ContainerStats = extern struct {
     memory_limit_pages: u32,
     peak_pages: u32,
 
-    pub fn getName(self: *const ContainerStats) []const u8 {
+    pub fn getName(self: *const CellStats) []const u8 {
         return self.name[0..self.name_len];
     }
 };
-/// Per-container observability counters returned by sys_container_counter_snapshot.
+/// Per-cell observability counters returned by sys_cell_counter_snapshot.
 /// Snapshot is non-atomic on single-CPU QEMU virt; consistent enough for diagnosis use.
-pub const ContainerCounters = extern struct {
-    /// Times this container was woken from a blocked state (counts both
+pub const CellCounters = extern struct {
+    /// Times this cell was woken from a blocked state (counts both
     /// blocked -> ready transitions and direct blocked -> running handoffs).
     wake_count: u64,
     /// Voluntary sleeps initiated by sys_sleep.
     sleep_count: u64,
-    /// IRQ-driven wakes targeting this container (e.g. PL011 RX).
+    /// IRQ-driven wakes targeting this cell (e.g. PL011 RX).
     irq_count: u64,
-    /// Mailbox pushes that succeeded (one per message sent).
-    icc_send_count: u64,
-    /// Messages popped from this container's mailbox via sys_icc_recv.
+    /// Channel sends that succeeded (one per chan_send message).
+    chan_send_count: u64,
+    /// Messages received on this cell's in-endpoints via sys_chan_recv.
     /// Counts messages consumed, not syscall invocations -- a recv that
     /// blocks then retries on wake counts as one increment, not two.
-    icc_recv_count: u64,
+    chan_recv_count: u64,
     /// Times a deadline-bearing block woke via timeout rather than event.
     deadline_expired_count: u64,
-    /// User-space data/instruction aborts that crashed this container.
+    /// User-space data/instruction aborts that crashed this cell.
     /// Stack-guard recovery is excluded.
     page_fault_count: u64,
     /// Successful first-use SIMD enables (FPEN trap -> buffer alloc OK).
     /// Failed allocs / null-tcb halts appear in kernel log instead and
     /// are not counted here.
     fp_trap_count: u64,
+};
+const lease_abi = @import("../shared/lease.zig");
+pub const MAX_LEASES_PER_CELL = lease_abi.MAX_LEASES_PER_CELL;
+pub const LeaseView = lease_abi.LeaseView;
+pub const LeaseSnapshot = lease_abi.LeaseSnapshot;
+const chan_abi = @import("../shared/icc/chan.zig");
+pub const MAX_ENDPOINTS_PER_CELL = chan_abi.MAX_ENDPOINTS_PER_CELL;
+pub const EndpointView = chan_abi.EndpointView;
+pub const EndpointSnapshot = chan_abi.EndpointSnapshot;
+pub const WAIT_FLAG_CHAN_ARM = chan_abi.WAIT_FLAG_CHAN_ARM;
+/// Death capsule: exit record plus endpoints and leases at capture.
+pub const DeathCapsule = extern struct {
+    rec: CellExitRecord,
+    endpoints: EndpointSnapshot,
+    leases: LeaseSnapshot,
 };
 /// In/out parameter block for console_ctl op=6 (kernel log cursor read).
 /// The cursor is a monotonic count of bytes ever logged (u64; survives
@@ -231,6 +277,7 @@ pub const Capability = struct {
     pub const SPAWN: u32 = 1 << 3;
     pub const KILL: u32 = 1 << 4;
     pub const PLATFORM_MMIO: u32 = 1 << 5;
+    pub const WIRE: u32 = 1 << 6;
 };
 
 pub const OpenFlags = struct {
@@ -278,6 +325,7 @@ pub const WakeReason = enum(u64) {
     peer_crashed = 4,
     ring = 5,
     closed = 6,
+    chan = 7,
     @"error" = 0xFFFFFFFF,
 };
 
@@ -288,6 +336,7 @@ pub const WakeEvent = union(WakeReason) {
     peer_crashed: u16,
     ring: u32,
     closed: u32,
+    chan: u32,
     @"error": void,
 
     pub fn unpack(tag: u64, payload: u64) WakeEvent {
@@ -299,10 +348,13 @@ pub const WakeEvent = union(WakeReason) {
             .peer_crashed => .{ .peer_crashed = @truncate(payload) },
             .ring => .{ .ring = @truncate(payload) },
             .closed => .{ .closed = @truncate(payload) },
+            .chan => .{ .chan = @truncate(payload) },
             .@"error" => .@"error",
         };
     }
 };
+
+pub const ChanResult = struct { x0: u64, x1: u64 };
 
 inline fn svc0(num: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num) : .{ .memory = true }); }
 inline fn svc1(num: u64, a0: u64) u64 { return asm volatile ("svc #0" : [ret] "={x0}" (-> u64), : [num] "{x8}" (num), [a0] "{x0}" (a0) : .{ .memory = true }); }
@@ -329,24 +381,24 @@ pub inline fn get_time() u64 {
     return svc0(@intFromEnum(Syscall.get_time));
 }
 
-pub inline fn spawn(name_ptr: *const u8, name_len: u64, container_type: u8, device_info_ptr: ?*const DeviceInfo, argv_ptr: ?*const u8, argv_len: u64) u64 {
-    return svc6(@intFromEnum(Syscall.spawn), @intFromPtr(name_ptr), name_len, container_type, @intFromPtr(device_info_ptr), @intFromPtr(argv_ptr), argv_len);
+pub inline fn spawn(name_ptr: *const u8, name_len: u64, cell_type: u8, aux_ptr: ?*const SpawnAux, argv_ptr: ?*const u8, argv_len: u64) u64 {
+    return svc6(@intFromEnum(Syscall.spawn), @intFromPtr(name_ptr), name_len, cell_type, @intFromPtr(aux_ptr), @intFromPtr(argv_ptr), argv_len);
 }
 
-pub inline fn kill(container_id: u16) u64 {
-    return svc1(@intFromEnum(Syscall.kill), container_id);
+pub inline fn kill(cell_id: u32) u64 {
+    return svc1(@intFromEnum(Syscall.kill), cell_id);
 }
 
-pub inline fn get_container_id() u64 {
-    return svc0(@intFromEnum(Syscall.get_container_id));
+pub inline fn get_cell_id() u64 {
+    return svc0(@intFromEnum(Syscall.get_cell_id));
 }
 
 pub inline fn sleep(nanoseconds: u64) u64 {
     return svc1(@intFromEnum(Syscall.sleep), nanoseconds);
 }
 
-pub inline fn wait_for_exit(container_id: u16) u64 {
-    return svc1(@intFromEnum(Syscall.wait_for_exit), container_id);
+pub inline fn wait_for_exit(cell_id: u32) u64 {
+    return svc1(@intFromEnum(Syscall.wait_for_exit), cell_id);
 }
 
 pub inline fn read(fd: u64, buf: *u8, len: u64, flags: u64, timeout_ns: u64) u64 {
@@ -357,16 +409,58 @@ pub inline fn get_platform() u64 {
     return svc0(@intFromEnum(Syscall.get_platform));
 }
 
-pub inline fn wait_event(irq_mask: u32, mailbox_id: u16, flags: u16, timeout_ns: u64) WakeEvent {
+pub inline fn wait_event(irq_mask: u32, flags: u16, timeout_ns: u64) WakeEvent {
     var x1_out: u64 = undefined;
     const x0_out = asm volatile ("svc #0"
         : [r0] "={x0}" (-> u64),
           [r1] "={x1}" (x1_out),
         : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.wait_event))),
           [a0] "{x0}" (@as(u64, irq_mask)),
-          [a1] "{x1}" (@as(u64, mailbox_id)),
+          [a1] "{x1}" (@as(u64, 0)), // reserved0 (tombstoned Break 6 mailbox_id)
           [a2] "{x2}" (@as(u64, flags)),
           [a3] "{x3}" (timeout_ns),
+        : .{ .memory = true });
+    return WakeEvent.unpack(x0_out, x1_out);
+}
+
+/// Multi-endpoint wait (channel_contract.md 15.6): block until any of
+/// the caller-held endpoints named by `tokens` is ready (queue
+/// non-empty or peer_closed) or `timeout_ns` elapses.
+/// Returns .chan with the ready token, or
+/// .chan payload 0 = "re-scan" (an endpoint was delivered or
+/// transitioned outside the armed set). tokens may be empty: the
+/// arm still catches deliver wakes for a provider holding nothing.
+/// Full-surface wait: IRQ mask + endpoint arm together (a driver
+/// serving channels while waiting on its device IRQ). tokens may
+/// be empty (deliver-wake-only arm).
+pub inline fn wait_event_full(irq_mask: u32, tokens: []const u32, timeout_ns: u64) WakeEvent {
+    var x1_out: u64 = undefined;
+    const x0_out = asm volatile ("svc #0"
+        : [r0] "={x0}" (-> u64),
+          [r1] "={x1}" (x1_out),
+        : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.wait_event))),
+          [a0] "{x0}" (@as(u64, irq_mask)),
+          [a1] "{x1}" (@as(u64, 0)), // reserved0 (tombstoned Break 6 mailbox_id)
+          [a2] "{x2}" (WAIT_FLAG_CHAN_ARM),
+          [a3] "{x3}" (timeout_ns),
+          [a4] "{x4}" (@intFromPtr(tokens.ptr)),
+          [a5] "{x5}" (@as(u64, tokens.len)),
+        : .{ .memory = true });
+    return WakeEvent.unpack(x0_out, x1_out);
+}
+
+pub inline fn wait_event_chan(tokens: []const u32, timeout_ns: u64) WakeEvent {
+    var x1_out: u64 = undefined;
+    const x0_out = asm volatile ("svc #0"
+        : [r0] "={x0}" (-> u64),
+          [r1] "={x1}" (x1_out),
+        : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.wait_event))),
+          [a0] "{x0}" (@as(u64, 0)),
+          [a1] "{x1}" (@as(u64, 0)), // reserved0 (tombstoned Break 6 mailbox_id)
+          [a2] "{x2}" (WAIT_FLAG_CHAN_ARM),
+          [a3] "{x3}" (timeout_ns),
+          [a4] "{x4}" (@intFromPtr(tokens.ptr)),
+          [a5] "{x5}" (@as(u64, tokens.len)),
         : .{ .memory = true });
     return WakeEvent.unpack(x0_out, x1_out);
 }
@@ -379,12 +473,12 @@ pub inline fn get_crash_telemetry(buffer_ptr: u64, json_buf_ptr: u64, json_buf_l
     return svc3(@intFromEnum(Syscall.get_crash_telemetry), buffer_ptr, json_buf_ptr, json_buf_len);
 }
 
-pub inline fn container_list(buffer_ptr: *ContainerInfo, max_entries: u64, flags: u64) u64 {
-    return svc3(@intFromEnum(Syscall.container_list), @intFromPtr(buffer_ptr), max_entries, flags);
+pub inline fn cell_list(buffer_ptr: *CellInfo, max_entries: u64, flags: u64) u64 {
+    return svc3(@intFromEnum(Syscall.cell_list), @intFromPtr(buffer_ptr), max_entries, flags);
 }
 
-pub inline fn container_log_read(container_id: u16, buffer_ptr: *u8, buffer_len: u64) u64 {
-    return svc3(@intFromEnum(Syscall.container_log_read), container_id, @intFromPtr(buffer_ptr), buffer_len);
+pub inline fn cell_log_read(cell_id: u32, buffer_ptr: *u8, buffer_len: u64) u64 {
+    return svc3(@intFromEnum(Syscall.cell_log_read), cell_id, @intFromPtr(buffer_ptr), buffer_len);
 }
 
 pub inline fn get_capabilities() u64 {
@@ -395,36 +489,32 @@ pub inline fn mem_info(buffer_ptr: *MemInfo) u64 {
     return svc1(@intFromEnum(Syscall.mem_info), @intFromPtr(buffer_ptr));
 }
 
-pub inline fn container_stats(buffer_ptr: *ContainerStats, max_entries: u64) u64 {
-    return svc2(@intFromEnum(Syscall.container_stats), @intFromPtr(buffer_ptr), max_entries);
+pub inline fn cell_stats(buffer_ptr: *CellStats, max_entries: u64) u64 {
+    return svc2(@intFromEnum(Syscall.cell_stats), @intFromPtr(buffer_ptr), max_entries);
 }
 
-pub inline fn set_memory_limit(target_container_id: u16, limit_pages: u32) u64 {
-    return svc2(@intFromEnum(Syscall.set_memory_limit), target_container_id, limit_pages);
+pub inline fn set_memory_limit(target_cell_id: u32, limit_pages: u32) u64 {
+    return svc2(@intFromEnum(Syscall.set_memory_limit), target_cell_id, limit_pages);
 }
 
-pub inline fn container_counter_snapshot(cid: u16, out_ptr: *ContainerCounters) u64 {
-    return svc2(@intFromEnum(Syscall.container_counter_snapshot), cid, @intFromPtr(out_ptr));
+pub inline fn cell_counter_snapshot(cid: u64, out_ptr: *CellCounters) u64 {
+    return svc2(@intFromEnum(Syscall.cell_counter_snapshot), cid, @intFromPtr(out_ptr));
 }
 
 pub inline fn set_affinity(cpu: u64) u64 {
     return svc1(@intFromEnum(Syscall.set_affinity), cpu);
 }
 
-pub inline fn icc_send(target_id: u16, msg_ptr: *const Message) u64 {
-    return svc2(@intFromEnum(Syscall.icc_send), target_id, @intFromPtr(msg_ptr));
+pub inline fn lease_snapshot(cid: u64, out_ptr: *LeaseSnapshot) u64 {
+    return svc2(@intFromEnum(Syscall.lease_snapshot), cid, @intFromPtr(out_ptr));
 }
 
-pub inline fn icc_recv(msg_ptr: *Message, timeout_ns: u64) u64 {
-    return svc2(@intFromEnum(Syscall.icc_recv), @intFromPtr(msg_ptr), timeout_ns);
+pub inline fn cell_history(buffer_ptr: *CellExitRecord, max_entries: u64, since_index: u64) u64 {
+    return svc3(@intFromEnum(Syscall.cell_history), @intFromPtr(buffer_ptr), max_entries, since_index);
 }
 
-pub inline fn icc_peek(msg_ptr: *Message) u64 {
-    return svc1(@intFromEnum(Syscall.icc_peek), @intFromPtr(msg_ptr));
-}
-
-pub inline fn icc_recv_typed(msg_ptr: *Message, expected_type: u16, timeout_ns: u64) u64 {
-    return svc3(@intFromEnum(Syscall.icc_recv_typed), @intFromPtr(msg_ptr), expected_type, timeout_ns);
+pub inline fn cell_capsule(cell_id: u32, out_ptr: *DeathCapsule) u64 {
+    return svc2(@intFromEnum(Syscall.cell_capsule), cell_id, @intFromPtr(out_ptr));
 }
 
 pub inline fn ring_arm(token: u32, ring_va: u64, last_snapshot: u32, direction: u32) u64 {
@@ -435,32 +525,73 @@ pub inline fn ring_wake(token: u32, direction: u32) u64 {
     return svc2(@intFromEnum(Syscall.ring_wake), token, direction);
 }
 
-pub inline fn ns_register(name_ptr: *const u8, name_len: u64) u64 {
-    return svc2(@intFromEnum(Syscall.ns_register), @intFromPtr(name_ptr), name_len);
+pub inline fn chan_create(contract_hash: u64, version: u16, out_tok_ptr: *u32, in_tok_ptr: *u32) u64 {
+    return svc4(@intFromEnum(Syscall.chan_create), contract_hash, version, @intFromPtr(out_tok_ptr), @intFromPtr(in_tok_ptr));
 }
 
-pub inline fn ns_lookup(name_ptr: *const u8, name_len: u64) u64 {
-    return svc2(@intFromEnum(Syscall.ns_lookup), @intFromPtr(name_ptr), name_len);
+pub inline fn chan_grant(ep: u32, target_cell: u32) u64 {
+    return svc2(@intFromEnum(Syscall.chan_grant), ep, target_cell);
 }
 
-pub inline fn ns_wait(name_ptr: *const u8, name_len: u64, timeout_ns: u64) u64 {
-    return svc3(@intFromEnum(Syscall.ns_wait), @intFromPtr(name_ptr), name_len, timeout_ns);
+pub inline fn chan_wire(out_ep: u32, in_ep: u32) u64 {
+    return svc2(@intFromEnum(Syscall.chan_wire), out_ep, in_ep);
 }
 
-pub inline fn map_create(size_pages: u64, flags: u64) u64 {
-    return svc2(@intFromEnum(Syscall.map_create), size_pages, flags);
+pub inline fn chan_send(ep: u32, msg_ptr: *const Message) ChanResult {
+    var x1_out: u64 = undefined;
+    const x0_out = asm volatile ("svc #0"
+        : [r0] "={x0}" (-> u64),
+          [r1] "={x1}" (x1_out),
+        : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.chan_send))),
+          [a0] "{x0}" (@as(u64, ep)),
+          [a1] "{x1}" (@as(u64, @intFromPtr(msg_ptr))),
+        : .{ .memory = true });
+    return .{ .x0 = x0_out, .x1 = x1_out };
 }
 
-pub inline fn map_attach(handle: u64, perms: u64) u64 {
-    return svc2(@intFromEnum(Syscall.map_attach), handle, perms);
+pub inline fn chan_recv(ep: u32, msg_ptr: *Message, timeout_ns: u64) ChanResult {
+    var x1_out: u64 = undefined;
+    const x0_out = asm volatile ("svc #0"
+        : [r0] "={x0}" (-> u64),
+          [r1] "={x1}" (x1_out),
+        : [num] "{x8}" (@as(u64, @intFromEnum(Syscall.chan_recv))),
+          [a0] "{x0}" (@as(u64, ep)),
+          [a1] "{x1}" (@as(u64, @intFromPtr(msg_ptr))),
+          [a2] "{x2}" (timeout_ns),
+        : .{ .memory = true });
+    return .{ .x0 = x0_out, .x1 = x1_out };
+}
+
+pub inline fn chan_close(ep: u32) u64 {
+    return svc1(@intFromEnum(Syscall.chan_close), ep);
+}
+
+pub inline fn chan_snapshot(cid: u64, out_ptr: *EndpointSnapshot) u64 {
+    return svc2(@intFromEnum(Syscall.chan_snapshot), cid, @intFromPtr(out_ptr));
+}
+
+pub inline fn chan_deliver(target: u32, tokens_ptr: *const u32, count: u64) u64 {
+    return svc3(@intFromEnum(Syscall.chan_deliver), target, @intFromPtr(tokens_ptr), count);
+}
+
+pub inline fn map_create(size_pages: u64, ep_or_0: u64) u64 {
+    return svc2(@intFromEnum(Syscall.map_create), size_pages, ep_or_0);
+}
+
+pub inline fn map_attach(ep: u32, grant_ref: u32, perms: u64) u64 {
+    return svc3(@intFromEnum(Syscall.map_attach), ep, grant_ref, perms);
 }
 
 pub inline fn map_detach(token: u32) u64 {
     return svc1(@intFromEnum(Syscall.map_detach), token);
 }
 
-pub inline fn map_handle(token: u32) u64 {
-    return svc1(@intFromEnum(Syscall.map_handle), token);
+pub inline fn map_bind(token: u32, ep: u32) u64 {
+    return svc2(@intFromEnum(Syscall.map_bind), token, ep);
+}
+
+pub inline fn map_size(token: u32) u64 {
+    return svc1(@intFromEnum(Syscall.map_size), token);
 }
 
 pub inline fn mmap(addr: u64, length: u64, prot: u32, flags: u32) u64 {
@@ -491,8 +622,8 @@ pub inline fn cache_clean_invalidate_range(addr: u64, size: u64) u64 {
     return svc2(@intFromEnum(Syscall.cache_clean_invalidate_range), addr, size);
 }
 
-pub inline fn set_cpu_quota(target_container_id: u16, quota_ticks: u64) u64 {
-    return svc2(@intFromEnum(Syscall.set_cpu_quota), target_container_id, quota_ticks);
+pub inline fn set_cpu_quota(target_cell_id: u32, quota_ticks: u64) u64 {
+    return svc2(@intFromEnum(Syscall.set_cpu_quota), target_cell_id, quota_ticks);
 }
 
 pub inline fn map_device(phys_addr: u64, size: u64) u64 {
@@ -509,10 +640,6 @@ pub inline fn irq_ack(irq_num: u64) u64 {
 
 pub inline fn alloc_dma(size: u64) u64 {
     return svc1(@intFromEnum(Syscall.alloc_dma), size);
-}
-
-pub inline fn get_device_list(buffer_ptr: *DeviceInfo, max_count: u64) u64 {
-    return svc2(@intFromEnum(Syscall.get_device_list), @intFromPtr(buffer_ptr), max_count);
 }
 
 pub inline fn get_assigned_device(buffer_ptr: *DeviceInfo) u64 {

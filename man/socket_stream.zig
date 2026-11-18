@@ -57,35 +57,11 @@ pub const WriteError = error{
 
 const WAKE_SLICE_NS: u64 = 50_000_000; // 50ms per wait slice
 
-/// Drain at most one head-of-mailbox ICC notification.
-///
-/// Disposition is driven by the typed `protocol.SocketWakeMsg` enum and the
-/// exhaustive `protocol.dispositionOf` switch (C8.18 Option C). Behavior:
-///   - `wake_only` + addressed to us  -> swallow (it's our own wake).
-///   - `wake_only` + addressed to peer -> leave queued (C8.13e inter-socket
-///     drain race: the peer's stream is parked on this exact wake).
-///   - Unknown to the wake set -> swallow defensively. This preserves the
-///     original behavior for stale ICC traffic from torn-down sockets;
-///     adding a new wake-class message requires extending `SocketWakeMsg`
-///     so the disposition is explicit, not emergent.
+/// L4: the mailbox wake-hint messages are gone (the ring-event wake is the
+/// sole writer/reader wake), so there is nothing to drain. Kept as a no-op
+/// call site anchor until the Break-6 deletion pass removes it.
 fn drainOwnWake(my_socket_id: u16) void {
-    var msg: sys.Message = undefined;
-    if (errors.isError(sys.icc_peek(&msg))) return;
-
-    const wake = protocol.socketWakeMsgFromU16(msg.msg_type) orelse {
-        _ = sys.icc_recv(&msg, 0);
-        return;
-    };
-
-    switch (protocol.dispositionOf(wake)) {
-        .wake_only => {
-            const wake_socket_id: u16 = @as(u16, msg.payload[0]) |
-                (@as(u16, msg.payload[1]) << 8);
-            if (wake_socket_id != my_socket_id and wake == .write_ready) return;
-            _ = sys.icc_recv(&msg, 0);
-        },
-        .deliver => return,
-    }
+    _ = my_socket_id;
 }
 
 /// SHM-backed read half of a socket. `token` is the recv-region attach
@@ -139,7 +115,7 @@ pub const ReadStream = struct {
             if (self.region.ring.isEmpty()) {
                 _ = sys.ring_arm(self.token, @intFromPtr(&self.region.ring), last_head, 0);
             }
-            _ = sys.wait_event(0, 1, 0, wait_ns);
+            _ = sys.wait_event(0, 0, wait_ns);
 
             // Drain a stale SOCKET_WRITE_READY for our own socket sitting
             // at head-of-mailbox from a prior write; otherwise wait_event
@@ -154,22 +130,26 @@ pub const ReadStream = struct {
     }
 };
 
-/// SHM-backed write half of a socket. `peer_id` + `socket_id` are captured
-/// so `notify()` can fire the SOCKET_SEND_READY mailbox wake that beats
-/// the stack's 50ms poll-timeout floor.
+/// SHM-backed write half of a socket. `notify_out` + `socket_id` are
+/// captured so `notify()` can fire the SOCKET_SEND_READY wake over the
+/// caller's net.stack BUNDLE (L4: the mailbox is dead; the stack drains
+/// this from the client's channel endpoint), beating the stack's 50ms
+/// poll-timeout floor.
 pub const WriteStream = struct {
     region: *volatile socket_shm.SendShmRegion,
     token: u32,
-    peer_id: u16,
+    /// The caller's net.stack bundle out-end token; 0 = no eager wake
+    /// (the stack's 50ms poll still drains).
+    notify_out: u32,
     socket_id: u16,
 
     pub fn from(
         region: *volatile socket_shm.SendShmRegion,
         token: u32,
-        peer_id: u16,
+        notify_out: u32,
         socket_id: u16,
     ) WriteStream {
-        return .{ .region = region, .token = token, .peer_id = peer_id, .socket_id = socket_id };
+        return .{ .region = region, .token = token, .notify_out = notify_out, .socket_id = socket_id };
     }
 
     /// Push as many bytes as fit into the send ring right now without parking.
@@ -213,7 +193,7 @@ pub const WriteStream = struct {
             if (self.region.ring.isFull()) {
                 _ = sys.ring_arm(self.token, @intFromPtr(&self.region.ring), last_tail, 1);
             }
-            _ = sys.wait_event(0, 1, 0, wait_ns);
+            _ = sys.wait_event(0, 0, wait_ns);
 
             // Drain stale SOCKET_WRITE_READY messages addressed to us so
             // they don't cause spurious icc wakes on subsequent wait_event
@@ -228,16 +208,17 @@ pub const WriteStream = struct {
         }
     }
 
-    // Fire-and-forget eager-drain wake. Stack drains the send ring
-    // synchronously on receipt; replaces the 50ms poll-timeout latency
-    // floor with a kernel-mediated mailbox wake.
+    // Fire-and-forget eager-drain wake over the net.stack bundle. Stack
+    // drains the send ring synchronously on receipt; replaces the 50ms
+    // poll-timeout latency floor.
     fn notify(self: WriteStream) void {
+        if (self.notify_out == 0) return;
         var msg: sys.Message = undefined;
         msg.msg_type = protocol.MsgType.SOCKET_SEND_READY;
         msg.flags = 0;
         @memset(&msg.payload, 0);
         msg.payload[0] = @truncate(self.socket_id);
         msg.payload[1] = @truncate(self.socket_id >> 8);
-        _ = sys.icc_send(self.peer_id, &msg);
+        _ = sys.chan_send(self.notify_out, &msg);
     }
 };

@@ -12,8 +12,9 @@
 // Layout (low -> high in TTBR0; canonical top-half is TTBR1 / kva_layout):
 //
 //   0x0000_0001_0000  code         (ELF load)
-//   0x0000_1000_0000  console_ring (64KB, zero-syscall I/O)
-//   0x0000_1001_0000  shared       (~256MB - 64KB, ICC buffers)
+//   0x0000_1000_0000  console_ring (64KB, zero-syscall output)
+//   0x0000_1001_0000  console_in   (4KB, zero-syscall stdin)
+//   0x0000_1001_1000  shared       (~256MB - 68KB, ICC buffers)
 //   0x0000_2000_0000  device       (256MB, MMIO via sys_map_io)
 //   0x0000_3000_0000  heap         (256MB, sys_brk)
 //   0x0000_4000_0000  dma          (256MB, sys_alloc_dma)
@@ -46,33 +47,42 @@ pub const Range = va.VaRange(.user);
 /// here for completeness and to anchor the tile from address 0x10000.
 pub const code = Range.init(0x10000, 0x10000000 - 0x10000);
 
-/// Per-container console ring buffer (Level 2 TTY, zero-syscall output).
+/// Per-cell console ring buffer (Level 2 TTY, zero-syscall output).
 /// Header is 64 bytes; data region is `size - 64`.
 pub const console_ring = Range.init(0x10000000, 64 * 1024);
 
-/// Shared-memory region for ICC buffers between containers. Starts at the
-/// console ring's end so a misedit there shifts this one too, syntactically.
-pub const shared = Range{ .base = console_ring.end(), .size = 0x10000000 - console_ring.size };
+/// Per-cell stdin ring buffer (Level 2 TTY, zero-syscall input).
+/// The kernel PL011 RX IRQ is the producer (writes received bytes); the
+/// cell is the consumer (drains without a syscall per read). Header is 64
+/// bytes; data region is `size - 64`. One page is ample for interactive
+/// typing and paste bursts -- overflow drops oldest, same policy as output.
+pub const console_in = Range{ .base = console_ring.end(), .size = 4 * 1024 };
 
-/// Device MMIO mappings for driver containers (`sys_map_io`).
+/// Shared-memory region for ICC buffers between cells. Starts at the
+/// stdin ring's end so a misedit above shifts this one too, syntactically.
+/// The size derivation keeps `shared.end() == device.base` regardless of
+/// the two ring sizes above.
+pub const shared = Range{ .base = console_in.end(), .size = 0x10000000 - console_ring.size - console_in.size };
+
+/// Device MMIO mappings for driver cells (`sys_map_io`).
 pub const device = Range.init(0x20000000, 0x10000000);
 
-/// Per-container dynamic heap. Containers call `sys_brk` to grow/shrink
+/// Per-cell dynamic heap. Cells call `sys_brk` to grow/shrink
 /// inside this slot; user code discovers `heap_start` via `sys_brk(0)`
 /// rather than reading this constant.
 pub const heap = Range.init(0x30000000, 0x10000000);
 
-/// DMA-coherent buffers for driver containers (`sys_alloc_dma`).
+/// DMA-coherent buffers for driver cells (`sys_alloc_dma`).
 pub const dma = Range.init(0x40000000, 0x10000000);
 
 /// Anonymous `sys_mmap` mappings (also backs Zig's page_allocator under
 /// `liblaminae`).
 pub const mmap = Range.init(0x50000000, 0x20000000);
 
-/// Static guard page at the bottom of every container's user stack. Mapped
+/// Static guard page at the bottom of every cell's user stack. Mapped
 /// with PROT_NONE so EL0 access aborts (caught by the kernel fault handler
 /// to produce a stack-overflow diagnostic). The usable stack continues above
-/// `user_stack_guard.end()` and is sized per-container by `SpawnSpec`.
+/// `user_stack_guard.end()` and is sized per-cell by `SpawnSpec`.
 pub const user_stack_guard = Range.init(0x7FFFFF000000, va.PAGE_SIZE);
 
 //------------------------------------------------------------------------------
@@ -85,9 +95,9 @@ pub const user_stack_guard = Range.init(0x7FFFFF000000, va.PAGE_SIZE);
 // is caught at compile time too. The user-stack guard sits at the canonical
 // top of TTBR0 and is checked independently.
 comptime {
-    const ordered = [_]Range{ code, console_ring, shared, device, heap, dma, mmap };
+    const ordered = [_]Range{ code, console_ring, console_in, shared, device, heap, dma, mmap };
     const names = [_][]const u8{
-        "code", "console_ring", "shared", "device", "heap", "dma", "mmap",
+        "code", "console_ring", "console_in", "shared", "device", "heap", "dma", "mmap",
     };
     var prev: u64 = 0;
     for (ordered, names) |r, name| {

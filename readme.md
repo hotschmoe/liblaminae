@@ -27,10 +27,10 @@ Auto-copied from `src/shared/` by `zig build gen-lib`. **Do not edit manually.**
 
 - `va_layout.zig` - Virtual address layout constants
 - `platform_types.zig` - Platform identification enum
-- `arch/` - EL0-safe barriers, idle, container_info
+- `arch/` - EL0-safe barriers, idle, cell_info
 - `compat/table.zig` - Device-to-driver compatibility table
-- `platform/table.zig` - Platform container lookup table
-- `icc/` - Inter-container communication schemas
+- `platform/table.zig` - Platform cell lookup table
+- `icc/` - Inter-cell communication schemas
 
 Source of truth: `src/shared/`
 
@@ -39,7 +39,7 @@ Source of truth: `src/shared/`
 ### Console I/O
 
 **Output** uses the zero-syscall console ring mapped at a fixed VA in every
-container. Import `console.zig` and call `console.write()` or `console.printf()`:
+cell. Import `console.zig` and call `console.write()` or `console.printf()`:
 
 ```zig
 const console = @import("liblaminae").console;
@@ -69,7 +69,7 @@ the shell load buffer is 128KB. Any size constraints come from the deployment
 pipeline (e.g., playground upload endpoint), not the OS.
 
 However, `console.printf()` pulls in `std.fmt` which significantly increases
-binary size (~6.5KB to ~103KB). For tiny containers where size matters, use
+binary size (~6.5KB to ~103KB). For tiny cells where size matters, use
 direct `sys.write()` with manual formatting:
 
 ```zig
@@ -80,7 +80,7 @@ fn write(msg: []const u8) void {
 }
 ```
 
-`console.printf` is the right choice for larger containers where binary size
+`console.printf` is the right choice for larger cells where binary size
 is not critical.
 
 ### Packed Return Values
@@ -89,8 +89,9 @@ Some syscalls pack two values into a single u64 return:
 
 - `map_create` and `map_attach` return `(token << 32) | (va & 0xFFFFFFFF)`.
   Use `sys.MapResult.token(result)` (u32) and `sys.MapResult.va(result)` to unpack.
-  The token is per-attach and is passed to `map_detach`. To get the cross-container
-  handle for ICC sharing, call `sys.map_handle(token)` after `map_create`.
+  The token is per-attach and is passed to `map_detach`. To share a region,
+  `sys.map_bind(token, ep)` publishes it onto a channel pair; the peer
+  `sys.map_attach(ep, grant_ref, perms)`. There is no forgeable handle.
 
 - `alloc_dma` returns `(bus_addr << 32) | (va & 0xFFFFFFFF)`.
   Use `sys.DmaResult.busAddr(result)` and `sys.DmaResult.va(result)` to unpack.
@@ -119,7 +120,7 @@ if (lib.isError(result)) {
 }
 const token = sys.MapResult.token(result); // u32, per-attach
 const va    = sys.MapResult.va(result);    // u64, virtual address
-const handle = sys.map_handle(token);      // u64, cross-container identity for ICC sharing
+const grant = sys.map_bind(token, ep);     // grant_ref; peer map_attach(ep, grant, perms)
 ```
 
 ## Regenerating

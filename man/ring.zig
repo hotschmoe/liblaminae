@@ -5,7 +5,7 @@
 // sys_ring_wake (producer) that closes the lost-wake race without
 // exposing the raw snapshot protocol to call sites.
 //
-// Contract reference: docs/architecture/contracts/ring_event_contract.md §8
+// Contract reference: docs/architecture/contracts/ring_event_contract.md Section 8
 //
 // Usage:
 //   var h = RingHandle(u8, 256){ .ring = ring_ptr, .token = tok };
@@ -18,7 +18,7 @@
 //
 // All `inline` annotations are load-bearing: the wrapper must compile to
 // the same machine code as manual ring.produce() + sys_ring_wake() calls
-// (zero-overhead abstraction, RE contract §8 last paragraph).
+// (zero-overhead abstraction, RE contract Section 8 last paragraph).
 //------------------------------------------------------------------------------
 
 const sys = @import("../gen/syscalls.zig");
@@ -74,11 +74,11 @@ pub fn RingHandle(comptime T: type, comptime N: u32) type {
             if (self.ring.hasData()) return; // fast path: data already present
             const arm_res = sys.ring_arm(self.token, @intFromPtr(self.ring), last, 0);
             if (@import("../gen/errors.zig").isError(arm_res)) return error.ArmFailed;
-            switch (sys.wait_event(0, 0, 0, timeout_ns)) {
+            switch (sys.wait_event(0, 0, timeout_ns)) {
                 .ring => {},
                 .timeout => return error.Timeout,
                 .closed => return error.RingClosed,
-                .irq, .icc, .peer_crashed, .@"error" => return error.Spurious,
+                .irq, .icc, .peer_crashed, .chan, .@"error" => return error.Spurious,
             }
         }
 
@@ -87,15 +87,20 @@ pub fn RingHandle(comptime T: type, comptime N: u32) type {
         /// Returns immediately if space is available (fast path).
         /// On WakeEvent.ring, returns ok; caller MUST re-check ring.hasSpace().
         pub inline fn waitForSpace(self: *Self, timeout_ns: u64) RingError!void {
-            const last = self.ring.head;
+            // Snapshot rule (stdio.zig): the producer snapshots the
+            // CONSUMER's index (tail @ +64) -- the kernel's direction-1 fast
+            // path re-reads tail vs this snapshot. Snapshotting head here
+            // busy-woke producers on a full ring (head != tail always) --
+            // the RingHandle.waitForSpace latent bug, reviewer-confirmed.
+            const last = self.ring.tail;
             if (self.ring.hasSpace()) return; // fast path
             const arm_res = sys.ring_arm(self.token, @intFromPtr(self.ring), last, 1);
             if (@import("../gen/errors.zig").isError(arm_res)) return error.ArmFailed;
-            switch (sys.wait_event(0, 0, 0, timeout_ns)) {
+            switch (sys.wait_event(0, 0, timeout_ns)) {
                 .ring => {},
                 .timeout => return error.Timeout,
                 .closed => return error.RingClosed,
-                .irq, .icc, .peer_crashed, .@"error" => return error.Spurious,
+                .irq, .icc, .peer_crashed, .chan, .@"error" => return error.Spurious,
             }
         }
 

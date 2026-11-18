@@ -6,8 +6,8 @@
 // Design:
 // - Simple bump allocator (no free, grows monotonically)
 // - Uses sys_brk to request pages from kernel
-// - Thread-unsafe (single container, single execution context)
-// - Suitable for containers that need dynamic allocation
+// - Thread-unsafe (single cell, single execution context)
+// - Suitable for cells that need dynamic allocation
 //
 // Usage:
 //   const heap = @import("liblaminae").heap;

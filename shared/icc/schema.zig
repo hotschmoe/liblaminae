@@ -14,11 +14,25 @@ pub const PAYLOAD_SIZE = 248;
 
 /// Main IPC Message Structure (256 bytes)
 /// Must match kernel ABI.
+///
+/// source_id + source_gen are kernel-stamped on send (cannot be spoofed) and
+/// together form the sender's generation-qualified identity: the first four
+/// bytes are exactly the packed CellId layout (raw | gen << 16), so
+/// `sourceIdentity()` can be fed straight to icc_send for a gen-gated reply
+/// that bounces (InvalidTarget) if the sender's raw slot was reused.
 pub const IccMessage = extern struct {
     source_id: u16,
+    source_gen: u16,
     msg_type: u16,
-    flags: u32,
+    flags: u16,
     payload: [PAYLOAD_SIZE]u8,
+
+    /// The sender's packed generation-qualified identity (raw | gen << 16).
+    /// Valid gen-gated icc_send target; compare FULL values to distinguish
+    /// incarnations that reused the same raw slot.
+    pub fn sourceIdentity(self: *const IccMessage) u32 {
+        return @as(u32, self.source_id) | (@as(u32, self.source_gen) << 16);
+    }
 };
 
 comptime {
@@ -124,6 +138,25 @@ pub const ranges = [_]MessageRange{
         },
     },
     .{
+        .name = "init.lamina",
+        .start = 0x3006,
+        .end = 0x3010,
+        .desc = "Lamina init control plane. SPAWN/SHUTDOWN/CONSOLE_SWITCH share 0x3000-0x3005 with blk historically; live numbers are src/shared/icc/protocols/init.zig.",
+        .messages = &.{
+            .{ .id = 0x3006, .name = "SPAWN_SHELL", .direction = "app -> init.lamina", .desc = "Login asks lamina to spawn a shell" },
+            .{ .id = 0x3007, .name = "SPAWN_SHELL_RESULT", .direction = "init.lamina -> app", .desc = "Shell spawn reply (id + err)" },
+            .{ .id = 0x3008, .name = "REBOOT", .direction = "app -> init.lamina", .desc = "Fire-and-forget PSCI/watchdog reboot" },
+            .{ .id = 0x3009, .name = "KILL", .direction = "app -> init.lamina", .desc = "Kill a cell by identity" },
+            .{ .id = 0x300A, .name = "KILL_RESULT", .direction = "init.lamina -> app", .desc = "Kill reply (kernel errno)" },
+            .{ .id = 0x300B, .name = "SPAWN_WITH_ARGS", .direction = "app -> init.lamina", .desc = "Spawn by name plus argv blob" },
+            .{ .id = 0x300C, .name = "CONNECT", .direction = "app -> init.lamina", .desc = "Dynamic channel acquisition" },
+            .{ .id = 0x300D, .name = "CONNECT_RESULT", .direction = "init.lamina -> app", .desc = "Connect reply (tokens + provider)" },
+            .{ .id = 0x300E, .name = "NET_EVENT", .direction = "net.stack -> init.lamina", .desc = "Network state notification" },
+            .{ .id = 0x300F, .name = "DRY_RUN", .direction = "app -> init.lamina", .desc = "Topology query without spawn or wire" },
+            .{ .id = 0x3010, .name = "DRY_RUN_RESULT", .direction = "init.lamina -> app", .desc = "Dry-run reply (WOULD_WIRE or REFUSED)" },
+        },
+    },
+    .{
         .name = "wasm3 driver (app <-> wasm_prime)",
         .start = 0x5000,
         .end = 0x5091,
@@ -144,7 +177,7 @@ pub const ranges = [_]MessageRange{
         .name = "Platform Services (driver <-> platform)",
         .start = 0x4000,
         .end = 0x4035,
-        .desc = "Platform container services for clock/power/reset control and board info.",
+        .desc = "Platform cell services for clock/power/reset control and board info.",
         .messages = &.{
             // Clock control (0x4000-0x4004)
             .{ .id = 0x4000, .name = "ENABLE_CLOCK", .direction = "driver -> platform", .desc = "Request clock enable" },
@@ -174,6 +207,16 @@ pub const ranges = [_]MessageRange{
             .{ .id = 0x4033, .name = "BOARD_REVISION_OK", .direction = "platform -> driver", .desc = "Board revision response" },
             .{ .id = 0x4034, .name = "SET_CLOCK_RATE", .direction = "driver -> platform", .desc = "Set clock rate (Hz)" },
             .{ .id = 0x4035, .name = "SET_CLOCK_RATE_OK", .direction = "platform -> driver", .desc = "Clock rate set successfully" },
+        },
+    },
+    .{
+        .name = "Contract handshake (client <-> any service)",
+        .start = 0x0F00,
+        .end = 0x0F01,
+        .desc = "RESERVED (Break 6 tombstone, 2026-07-21): the runtime HELLO/ACK handshake died with the ambient mailbox -- contract refusal moved to wire time (CH.5). The ids are never reused.",
+        .messages = &.{
+            .{ .id = 0x0F00, .name = "CONTRACT_HELLO", .direction = "client -> service", .desc = "payload = version:u16 + hash:u64 (the client's own protocol module CONTRACT_VERSION/CONTRACT_HASH)" },
+            .{ .id = 0x0F01, .name = "CONTRACT_ACK", .direction = "service -> client", .desc = "payload[0] = 1 accept / 0 refuse, then the service's own version:u16 + hash:u64 for diagnostics" },
         },
     },
 };

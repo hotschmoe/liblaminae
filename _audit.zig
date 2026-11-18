@@ -9,7 +9,7 @@
 //       - bounded computation, no indefinite blocking
 //       - pure or caller-allocator (no hidden allocations -- T1.2)
 //
-//   T2: thin client of a peer container
+//   T2: thin client of a peer cell
 //       - bounded-timeout peer ICC permitted
 //       - still no indefinite block
 //
@@ -41,7 +41,7 @@
 const std = @import("std");
 
 /// T1 modules: vocabulary, T0 syscalls only, no peer ICC.
-/// `rpc` is the generic RPC primitive — itself parameterized over peer,
+/// `rpc` is the generic RPC primitive -- itself parameterized over peer,
 /// so vocabulary by construction; per-peer instantiations are T2.
 const t1_modules = struct {
     pub const console = @import("man/console.zig");
@@ -54,15 +54,18 @@ const t1_modules = struct {
     pub const net_shm = @import("man/net_shm.zig");
     pub const net_protocol = @import("man/net_protocol.zig");
     pub const rpc = @import("man/rpc.zig");
+    pub const channel = @import("man/channel.zig");
     pub const http = @import("man/http.zig");
     pub const socket_stream = @import("man/socket_stream.zig");
     pub const ring = @import("man/ring.zig");
     pub const fbcon = @import("man/fbcon.zig");
+    pub const identity = @import("man/identity.zig");
+    pub const graph = @import("man/graph.zig");
 };
 
-/// T2 modules: thin RPC clients of peer containers, bounded-timeout ICC.
+/// T2 modules: thin RPC clients of peer cells, bounded-timeout ICC.
 /// Each lives in its own per-peer namespace (`lib/<peer>_client/`) so the
-/// directory itself documents the tier — `lib/man/` is strict T1.
+/// directory itself documents the tier -- `lib/man/` is strict T1.
 const t2_modules = struct {
     pub const init_client = @import("init_client/api.zig");
     pub const platform_client = @import("platform_client/api.zig");

@@ -1,8 +1,8 @@
 //------------------------------------------------------------------------------
 // Laminae Cooperative Task System
 //
-// Zero-kernel-overhead cooperative multitasking for containers.
-// Tasks share the same container's address space and cooperatively yield.
+// Zero-kernel-overhead cooperative multitasking for cells.
+// Tasks share the same cell's address space and cooperatively yield.
 //
 // Design: Based on spawn_evolution.md Option C (Userland Cooperative Tasks)
 //

@@ -2,7 +2,7 @@
 // Wasm3 Driver Protocol -- Method specs for `lib/wasm_client/`
 //------------------------------------------------------------------------------
 //
-// Single source of truth for the wasm3 runtime container's ICC message
+// Single source of truth for the wasm3 runtime cell's ICC message
 // format. The client lib (`lib/wasm_client/api.zig`) imports this; the
 // driver (`user/drivers/wasm3_runtime/main.zig`) imports this; no one else.
 //
@@ -20,9 +20,16 @@
 // `rpc.call` -- which assumes a single REPLY_TYPE per request -- can
 // drive the wasm3 client like every other peer.
 //
+// Import-free by design (the_law/HARDLINE.md section 5), amended by L1.1
+// (the_law/adoption_plan.md) to allow exactly one leaf import:
+// `src/shared/icc/contract.zig`, itself import-free. It supplies the
+// CONTRACT_HASH computation below.
+//
 //------------------------------------------------------------------------------
 
-/// Mailbox payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
+const contract = @import("contract");
+
+/// Channel-message payload size. Mirrors `src/shared/icc/schema.zig` PAYLOAD_SIZE --
 /// this module is import-free by design; lib/root.zig asserts the mirror.
 pub const PAYLOAD_SIZE = 248;
 
@@ -119,11 +126,25 @@ pub const LoadReply = struct {
     }
 };
 
+/// Wire shape shared by LOAD_RESULT / CALL_RESULT replies: Status byte at
+/// offset 0, NUL-terminated body from offset 1 (max MAX_REPLY_STR bytes),
+/// with the final payload byte reserved as a guaranteed NUL slot. Matches
+/// `writeReply` / `extractStringAt(_, 1)`.
+pub const ResultWire = extern struct { status: u8, body: [MAX_REPLY_STR]u8 };
+
+/// Wire shape shared by the string-carrying requests (module path, function
+/// name, service name): NUL-terminated string at offset 0, max
+/// MAX_PAYLOAD_STR bytes (the zeroed final byte terminates a max-length
+/// string). Matches `writeString` / `extractString`.
+pub const StringRequestWire = extern struct { str: [MAX_PAYLOAD_STR]u8 };
+
 pub const LoadModule = struct {
     pub const REQ_TYPE: u16 = WasmMsgType.LOAD_MODULE;
     pub const REPLY_TYPE: u16 = WasmMsgType.LOAD_RESULT;
     pub const Request = struct { path: []const u8 };
     pub const Reply = LoadReply;
+    pub const WireRequest = StringRequestWire;
+    pub const WireReply = ResultWire;
     pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.path);
     }
@@ -148,6 +169,8 @@ pub const CallFunc = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.CALL_RESULT;
     pub const Request = struct { name: []const u8 };
     pub const Reply = CallReply;
+    pub const WireRequest = StringRequestWire;
+    pub const WireReply = ResultWire;
     pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.name);
     }
@@ -161,6 +184,7 @@ pub const SetName = struct {
     pub const REPLY_TYPE: u16 = WasmMsgType.SET_NAME_OK;
     pub const Request = struct { name: []const u8 };
     pub const Reply = struct {};
+    pub const WireRequest = StringRequestWire;
     pub fn serialize(req: Request, payload: *[PAYLOAD_SIZE]u8) void {
         writeString(payload, req.name);
     }
@@ -185,3 +209,29 @@ pub const Unload = struct {
     pub const Request = struct {};
     pub fn serialize(_: Request, _: *[PAYLOAD_SIZE]u8) void {}
 };
+
+//------------------------------------------------------------------------------
+// Contract hash (L1.1) -- wire-time refusal between mismatched trees.
+//------------------------------------------------------------------------------
+
+pub const CONTRACT_VERSION: u16 = 1;
+
+/// Method specs in wire order. Single source for both the CONTRACT_HASH walk
+/// and `tools/gen_docs.zig`'s contract reference (docs/api/contracts.md).
+pub const SPECS = .{ LoadModule, CallFunc, SetName, Ping, Unload };
+
+pub const CONTRACT_HASH: u64 = contract.hashSpecs(SPECS, NAMESPACE, CONTRACT_VERSION);
+
+// The contract hash and gen_docs walk the Wire* structs above (the API
+// Request/Reply types carry slices / a full payload copy, which say nothing
+// about wire bytes). These asserts pin the wire structs to the hand-written
+// serializer offsets and string caps -- drift is a compile error.
+comptime {
+    if (@sizeOf(StringRequestWire) != MAX_PAYLOAD_STR or
+        MAX_PAYLOAD_STR + 1 != PAYLOAD_SIZE)
+        @compileError("wasm3: request wire region drifted from writeString()");
+    if (@offsetOf(ResultWire, "status") != 0 or
+        @offsetOf(ResultWire, "body") != 1 or
+        1 + MAX_REPLY_STR + 1 != PAYLOAD_SIZE)
+        @compileError("wasm3: reply wire layout drifted from writeReply()");
+}

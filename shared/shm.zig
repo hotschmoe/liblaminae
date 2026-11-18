@@ -1,8 +1,8 @@
 //------------------------------------------------------------------------------
 // Generic Shared Memory Primitives
 //
-// Composable building blocks for inter-container shared memory data planes.
-// All types are extern structs for stable ABI layout across containers.
+// Composable building blocks for inter-cell shared memory data planes.
+// All types are extern structs for stable ABI layout across cells.
 //
 // Primitives:
 //   RegionHeader    - Standard SHM region header with lifecycle states
@@ -13,7 +13,7 @@
 // Barrier Convention:
 //   All ring operations use DMB ISH (inner shareable data memory barrier)
 //   between data access and index updates. This provides release/acquire
-//   semantics for SPSC communication between containers on the same SoC.
+//   semantics for SPSC communication between cells on the same SoC.
 //   Consumer `hasData()` / `availableBytes()` use DMB ISHLD (load-acquire)
 //   so the subsequent data read cannot be reordered before the head load.
 //

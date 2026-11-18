@@ -1,21 +1,21 @@
 //------------------------------------------------------------------------------
-// ContainerType - Shared kernel/userspace container classification
+// CellType - Shared kernel/userspace cell classification
 //
 // SOURCE OF TRUTH: This file is copied to lib/shared/ by `zig build gen-lib`.
-// Do not edit lib/shared/container_type.zig directly.
+// Do not edit lib/shared/cell_type.zig directly.
 //
 // The enum tags must match what the kernel's spawn syscall expects in its
-// `container_type: u8` argument. The kernel's `ContainerTypeSpec` table
-// (src/kernel/container/table.zig) is keyed off this enum and lives kernel-side
+// `cell_type: u8` argument. The kernel's `CellTypeSpec` table
+// (src/kernel/cell/table.zig) is keyed off this enum and lives kernel-side
 // because it carries capability bitmasks, exception-level templates, and
 // page-table policy -- none of which userspace needs to know.
 //
 // Userspace (lamina, build_config) uses the enum tags directly when asking the
-// kernel to spawn a container; the raw u8 sent over the syscall boundary is
-// `@intFromEnum(ContainerType.<tag>)`.
+// kernel to spawn a cell; the raw u8 sent over the syscall boundary is
+// `@intFromEnum(CellType.<tag>)`.
 //------------------------------------------------------------------------------
 
-pub const ContainerType = enum(u8) {
+pub const CellType = enum(u8) {
     /// Regular user application -- minimal privileges.
     /// Cannot access hardware directly; all device access via syscalls.
     user = 0,
@@ -25,15 +25,15 @@ pub const ContainerType = enum(u8) {
     /// Still runs at EL0 with capability-gated syscalls.
     driver = 1,
 
-    /// Privileged init container -- full capabilities.
-    /// Has all capabilities including spawn/kill for container management.
+    /// Privileged init cell -- full capabilities.
+    /// Has all capabilities including spawn/kill for cell management.
     /// Typically only one instance, but max_instances can be adjusted.
     /// Crash = system crash (not restartable by default).
     init = 2,
 
-    /// Platform container -- manages clocks/power/resets via platform hardware.
+    /// Platform cell -- manages clocks/power/resets via platform hardware.
     /// Can map any MMIO in the platform peripheral range without an assigned
-    /// device. Used by virt (today) and ms_r1 (planned) platform containers.
+    /// device. Used by virt (today) and ms_r1 (planned) platform cells.
     platform = 3,
 
     /// Kernel test mode -- DEVELOPMENT ONLY.
@@ -42,7 +42,7 @@ pub const ContainerType = enum(u8) {
     kernel_test = 255,
 
     /// Human-readable name for logs and diagnostics.
-    pub fn name(self: ContainerType) []const u8 {
+    pub fn name(self: CellType) []const u8 {
         return switch (self) {
             .user => "user",
             .driver => "driver",

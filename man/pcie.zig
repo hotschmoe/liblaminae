@@ -2,7 +2,7 @@
 // PCIe User-Space Library (ECAM transport)
 //
 // Config-space access, bus enumeration, BAR sizing/assignment, and bridge
-// setup for driver containers on ECAM-based PCIe host controllers.
+// setup for driver cells on ECAM-based PCIe host controllers.
 //
 // Target: MS-R1 (CIX CP8180 "sky1"). Its five root complexes expose plain
 // ECAM config windows (verified against the vendor kernel on device1; see

@@ -1,10 +1,10 @@
 //------------------------------------------------------------------------------
-// Platform Client — RPC stub for the platform container
+// Platform Client -- RPC stub for the platform cell
 //------------------------------------------------------------------------------
 //
-// Drivers call into the platform container for clock/power/reset/board-info
+// Drivers call into the platform cell for clock/power/reset/board-info
 // operations without knowing the underlying SoC details. The platform
-// container handles the platform-specific work (mailbox/PSCI/PMIC/etc.);
+// cell handles the platform-specific work (mailbox/PSCI/PMIC/etc.);
 // drivers see a uniform interface.
 //
 // Usage:
@@ -15,11 +15,16 @@
 //------------------------------------------------------------------------------
 
 const rpc = @import("../man/rpc.zig");
+const channel = @import("../man/channel.zig");
 const proto = @import("platform_protocol");
 
 /// Tier-contract classification (audited by `lib/_audit.zig`).
-/// Thin RPC client of the platform container -- bounded-timeout ICC for
-/// clock/power/reset ops. Peer-dependent, hence T2.
+/// Thin channel-RPC client of the platform cell. Peer-dependent, hence T2.
+/// FIRST L4-MIGRATED CLIENT (channel_contract.md 15.2/15.3): the platform
+/// bundle arrives at spawn via the manifest `requires` edge (spawn-fold),
+/// discovery is channel.requiredChannel(hash) -- no ns_lookup, and no
+/// CONTRACT_HELLO handshake: the wire-time hash check (CH.5) already
+/// enforced contract agreement when lamina wired the bundle.
 pub const tier: u8 = 2;
 
 /// Re-export protocol constants for callers that need raw message types.
@@ -28,47 +33,60 @@ pub const PlatformMsgType = proto.PlatformMsgType;
 pub const Error = error{
     PlatformNotFound,
     OperationFailed,
+    /// Retained for API stability (wasm/blk peers still handshake); the
+    /// channel path cannot produce it -- a hash mismatch refuses the WIRE.
+    ContractMismatch,
 } || rpc.RpcError;
 
-// 5-second timeout matches the original lib/man/platform.zig timing — long
+// 5-second timeout matches the original lib/man/platform.zig timing -- long
 // enough that a busy platform peer (e.g. waiting on real PSCI calls on
 // MS-R1) won't timeout under load, short enough that a missing peer fails
 // the boot sequence rather than hanging forever.
 const PLATFORM_TIMEOUT: rpc.Timeout = .{ .ms = 5000 };
 
-// Cached peer handle (lazy ns_lookup, mirrors the prior platform.zig pattern).
-var cached_peer: ?rpc.PeerHandle = null;
+// Cached bundle (lazy self-snapshot discovery; the bundle itself was folded
+// in at spawn, so discovery cannot race the provider).
+var cached_ch: ?channel.Channel = null;
 
-fn getPeer() Error!rpc.PeerHandle {
-    if (cached_peer) |p| return p;
-    const p = rpc.PeerHandle.lookup(proto.NAMESPACE) catch return Error.PlatformNotFound;
-    cached_peer = p;
-    return p;
+fn getChannel() Error!channel.Channel {
+    if (cached_ch) |c| return c;
+    // Sweep dead pairs first so a replayed fresh bundle is unambiguous and
+    // respawn cycles cannot accrete toward the endpoint budget (post-land
+    // review, grok finding 3).
+    _ = channel.reclaimClosed(proto.CONTRACT_HASH);
+    const c = channel.requiredChannel(proto.CONTRACT_HASH) catch return Error.PlatformNotFound;
+    cached_ch = c;
+    return c;
 }
 
-/// Clear the cached peer handle. Useful if the platform container restarts
-/// and needs to be re-discovered.
+/// Clear the cached bundle. Useful if the platform cell restarts and a
+/// fresh bundle is delivered (re-discovery via self-snapshot).
 pub fn clearCache() void {
-    cached_peer = null;
+    cached_ch = null;
 }
 
-/// Resolve the platform container ID, doing the namespace lookup on first
-/// call and serving from cache thereafter. Useful for callers that want to
-/// send raw ICC messages bypassing the typed wrappers (e.g. driver tests
-/// asserting the lookup path itself).
+/// The platform provider's raw cell id (from the bundle's wired-peer
+/// identity). Kept for callers/tests that assert the discovery path.
 pub fn getPlatformId() Error!u16 {
-    const peer = try getPeer();
-    return peer.id;
+    const ch = try getChannel();
+    return @truncate(ch.peer);
 }
 
-/// Resolve the platform peer, issue the RPC, and translate the generic
-/// `InvalidProtocol` (peer replied with the wrong msg_type) into the
-/// platform-domain `OperationFailed`. Used by both void-reply and
-/// typed-reply wrappers below.
+/// Issue the RPC over the platform bundle and translate the generic
+/// errors into the platform-domain set. PeerClosed (LAW 3: the provider
+/// died; lamina re-wires on respawn) surfaces as PlatformNotFound after
+/// dropping the stale cached bundle.
 fn callRpc(comptime Spec: type, req: Spec.Request) Error!Spec.Reply {
-    const peer = try getPeer();
-    return rpc.call(peer, Spec, req, PLATFORM_TIMEOUT) catch |err|
-        if (err == rpc.RpcError.InvalidProtocol) Error.OperationFailed else err;
+    const ch = try getChannel();
+    return channel.call(ch, Spec, req, PLATFORM_TIMEOUT) catch |err| switch (err) {
+        channel.CallError.InvalidProtocol => Error.OperationFailed,
+        channel.CallError.PeerClosed => blk: {
+            cached_ch = null;
+            break :blk Error.PlatformNotFound;
+        },
+        channel.CallError.TimedOut => Error.TimedOut,
+        channel.CallError.IccError => Error.IccError,
+    };
 }
 
 fn callVoid(comptime Spec: type, req: Spec.Request) Error!void {

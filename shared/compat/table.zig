@@ -6,7 +6,7 @@
 //
 // Usage:
 // - Kernel drivers use this table for table-driven isCompatible()
-// - Lamina uses this table to match devices to driver containers
+// - Lamina uses this table to match devices to driver cells
 // - gen-docs generates documentation from this table
 // - Comptime validation ensures all supported entries have drivers
 //
@@ -25,7 +25,7 @@ const std = @import("std");
 /// Handler: Which component handles this device
 pub const Handler = enum {
     kernel, // Handled by kernel driver at boot
-    lamina, // Lamina spawns a driver container
+    lamina, // Lamina spawns a driver cell
 };
 
 /// Device class for grouping and driver matching
@@ -41,8 +41,8 @@ pub const Class = enum {
     usb,
 };
 
-/// Execution container kind (mirrors kernel ContainerType numerics)
-pub const ContainerKind = enum(u8) {
+/// Execution cell kind (mirrors kernel CellType numerics)
+pub const CellKind = enum(u8) {
     user = 0,
     driver = 1,
     init = 2,
@@ -77,8 +77,8 @@ pub const CompatEntry = struct {
     /// Driver binary name to spawn (null if kernel-handled or not yet implemented)
     driver_binary: ?[]const u8 = null,
 
-    /// Container kind expected for the driver (only relevant for lamina handlers)
-    container_kind: ContainerKind = .driver,
+    /// Cell kind expected for the driver (only relevant for lamina handlers)
+    cell_kind: CellKind = .driver,
 
     /// Support status
     status: Status = .supported,
@@ -148,7 +148,7 @@ pub const table = [_]CompatEntry{
         .class = .network,
         .handler = .lamina,
         .driver_binary = "netd",
-        .container_kind = .driver,
+        .cell_kind = .driver,
         .status = .supported,
         .notes = "VirtIO-Net over MMIO (QEMU virt)",
     },
@@ -157,7 +157,7 @@ pub const table = [_]CompatEntry{
         .class = .block,
         .handler = .lamina,
         .driver_binary = "blkd",
-        .container_kind = .driver,
+        .cell_kind = .driver,
         .status = .supported,
         .notes = "VirtIO-Block over MMIO",
     },
@@ -173,7 +173,7 @@ pub const table = [_]CompatEntry{
         .class = .display,
         .handler = .lamina,
         .driver_binary = "ramfbd",
-        .container_kind = .driver,
+        .cell_kind = .driver,
         .status = .supported,
         .notes = "QEMU fw_cfg MMIO -- ramfbd consumes etc/ramfb when present",
     },
@@ -189,7 +189,7 @@ pub const table = [_]CompatEntry{
         .class = .network,
         .handler = .lamina,
         .driver_binary = "netd",
-        .container_kind = .driver,
+        .cell_kind = .driver,
         .status = .supported,
         .notes = "Realtek RTL8127 10GbE behind a sky1 PCIe RC (ECAM + BAR window regs); netd rtl8127 backend",
     },
@@ -198,7 +198,7 @@ pub const table = [_]CompatEntry{
         .class = .usb,
         .handler = .lamina,
         .driver_binary = "xhcid",
-        .container_kind = .driver,
+        .cell_kind = .driver,
         .status = .supported,
         .notes = "Cadence USBSSP xHCI host block (MS-R1 CP8180); adopt-don't-init, firmware leaves it running",
     },

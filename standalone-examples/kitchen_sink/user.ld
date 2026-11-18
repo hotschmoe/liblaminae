@@ -3,7 +3,7 @@
  * 
  * Entry point at offset 0 in the flat binary.
  * The kernel binary_loader handles loading and memory setup.
- * Capability differences are managed by the container table, not here.
+ * Capability differences are managed by the cell table, not here.
  */
 
 ENTRY(_start)

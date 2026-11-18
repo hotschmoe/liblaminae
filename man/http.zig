@@ -1,5 +1,5 @@
 //------------------------------------------------------------------------------
-// HTTP Parser & Builder — T1 vocabulary
+// HTTP Parser & Builder -- T1 vocabulary
 //------------------------------------------------------------------------------
 //
 // Pure HTTP/1.x parsing/building primitives. No peer ICC, no socket calls,

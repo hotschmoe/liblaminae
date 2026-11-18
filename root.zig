@@ -11,7 +11,7 @@
 //   lib.va_layout.PAGE_SIZE;    // shared types + PAGE_SIZE
 //------------------------------------------------------------------------------
 
-// T1 vocabulary modules (lib/man/) — pure, peer-free, T0 syscalls only
+// T1 vocabulary modules (lib/man/) -- pure, peer-free, T0 syscalls only
 pub const console = @import("man/console.zig");
 pub const heap = @import("man/heap.zig");
 pub const tasks = @import("man/tasks.zig");
@@ -22,12 +22,16 @@ pub const socket_shm = @import("man/socket_shm.zig");
 pub const net_shm = @import("man/net_shm.zig");
 pub const net_protocol = @import("man/net_protocol.zig");
 pub const rpc = @import("man/rpc.zig");
+pub const channel = @import("man/channel.zig");
 pub const http = @import("man/http.zig");
 pub const socket_stream = @import("man/socket_stream.zig");
 pub const ring = @import("man/ring.zig");
+pub const stdio = @import("man/stdio.zig");
 pub const fbcon = @import("man/fbcon.zig");
+pub const identity = @import("man/identity.zig");
+pub const graph = @import("man/graph.zig");
 
-// T2 RPC client modules — thin clients of named peer containers
+// T2 RPC client modules -- thin clients of named peer cells
 pub const init_client = @import("init_client/api.zig");
 pub const init_protocol = @import("init_protocol");
 pub const platform_client = @import("platform_client/api.zig");
@@ -36,6 +40,9 @@ pub const blk_client = @import("blk_client/api.zig");
 pub const blk_protocol = @import("blk_protocol");
 pub const wasm_client = @import("wasm_client/api.zig");
 pub const wasm_protocol = @import("wasm_protocol");
+
+pub const netdrv_protocol = @import("netdrv_protocol");
+pub const testing_protocol = @import("testing_protocol");
 pub const net_client = @import("net_client/api.zig");
 pub const http_client = @import("net_client/http_transport.zig");
 
@@ -47,17 +54,18 @@ pub const errors = @import("gen/errors.zig");
 pub const fmt = @import("shared/fmt.zig");
 pub const font = @import("shared/font.zig");
 pub const shm = @import("shared/shm.zig");
+pub const pipe = @import("shared/pipe.zig");
 pub const va_layout = @import("shared/va_layout.zig");
 pub const uva_layout = @import("shared/uva_layout.zig");
 pub const barriers = @import("shared/arch/barriers_el0.zig");
 pub const idle = @import("shared/arch/idle_el0.zig");
-pub const container_info = @import("shared/arch/container_info.zig");
+pub const cell_info = @import("shared/arch/cell_info.zig");
 pub const compat = @import("shared/compat/table.zig");
 pub const platform_table = @import("shared/platform/table.zig");
 pub const icc_schema = @import("shared/icc/schema.zig");
 pub const filetypes = @import("shared/filetypes.zig");
-pub const container_type = @import("shared/container_type.zig");
-pub const ContainerType = container_type.ContainerType;
+pub const cell_type = @import("shared/cell_type.zig");
+pub const CellType = cell_type.CellType;
 
 // Shared protocol specifications (build.zig provides module mapping)
 pub const net_stack_protocol = @import("net_stack_protocol");
@@ -65,9 +73,12 @@ pub const platform_types = @import("platform_types");
 pub const PlatformType = platform_types.PlatformType;
 
 // The standalone protocol modules mirror icc_schema.PAYLOAD_SIZE (they are
-// import-free single-file modules). Hold the mirrors to the canonical value.
+// import-free single-file modules -- amended by L1.1, the_law/adoption_plan.md,
+// to allow exactly one leaf import: src/shared/icc/contract.zig, itself
+// import-free, which supplies each module's CONTRACT_HASH). Hold the
+// mirrors to the canonical value.
 comptime {
-    for (.{ init_protocol, platform_protocol, blk_protocol, wasm_protocol, net_stack_protocol }) |p| {
+    for (.{ init_protocol, platform_protocol, blk_protocol, wasm_protocol, netdrv_protocol, net_stack_protocol, testing_protocol }) |p| {
         if (p.PAYLOAD_SIZE != icc_schema.PAYLOAD_SIZE) {
             @compileError("protocol module PAYLOAD_SIZE mirror drifted from icc_schema.PAYLOAD_SIZE");
         }
@@ -77,8 +88,8 @@ comptime {
 /// Check if a return value is an error code
 pub const isError = errors.isError;
 
-// Re-export getContainerId for convenience (zero-syscall via TPIDRRO_EL0)
-pub const getContainerId = container_info.getContainerId;
+// Re-export getCellId for convenience (zero-syscall via TPIDRRO_EL0)
+pub const getCellId = cell_info.getCellId;
 
 // Tier-contract audit (contracts follow-up item 3). Comptime-only -- the
 // import forces _audit.zig's comptime block to evaluate, which asserts
